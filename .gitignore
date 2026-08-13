@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+
+# Base de donnees locale (donnees du magasin, pas du code) et build PyInstaller
+caisse.db
+build/
+dist/
+*.spec
+
+# Genere a chaque lancement, pas utile a versionner
+diagnostic_ecran.log
+
+# Config locale de l'outil Claude Code (specifique a ce poste)
+.claude/settings.local.json

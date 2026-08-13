@@ -1,0 +1,877 @@
+# -*- coding: utf-8 -*-
+"""
+Etape 3 : ecran de caisse + pave numerique de quantite pour "Hubert & Pessina".
+
+- Clic normal sur une tuile (produit simple ou parfum) = +1 unite.
+- Petit badge "123" dans le coin de la tuile = ouvre le pave numerique pour
+  ajouter une quantite precise en un seul coup.
+
+Pas encore de mode admin / historique (etapes 4 et 5).
+"""
+
+import os
+import sys
+import tkinter as tk
+from tkinter import messagebox
+from datetime import datetime
+
+import database
+import impression
+from admin import FenetreAdmin
+from historique import FenetreHistorique, FenetreRecap
+from pave_numerique import PaveNumerique
+from styles import (
+    BLANC, BRUN_200, BRUN_500, BRUN_700, BRUN_800, CREME, OR, ROUGE, VERT,
+    HEADER_DEGRADE_GAUCHE, HEADER_DEGRADE_DROITE, POLICE_BADGE, POLICE_CATEGORIE, POLICE_CATEGORIE_CAISSE,
+    POLICE_ENCAISSER, POLICE_PRODUIT_HINT, POLICE_PRODUIT_NOM, POLICE_PRODUIT_PRIX,
+    POLICE_SOUS_TITRE, POLICE_TICKET_DETAIL, POLICE_TICKET_NOM, POLICE_TICKET_TITRE,
+    POLICE_TITRE, POLICE_TOTAL, POLICE_BOUTON_ROND,
+    BoutonArrondi, ScrollableFrame, largeur_texte, rectangle_arrondi,
+    definir_dpi_awareness, diagnostiquer_ecran, zone_travail_windows,
+)
+
+# A incrementer a chaque changement visible de l'ecran de caisse : s'affiche
+# dans le titre de la fenetre pour verifier sans ambiguite, en cas de doute,
+# que la version testee sur un poste est bien la derniere (et pas un ancien
+# .exe reste sur le PC).
+VERSION_APP = "2026-08-13.7"
+
+NB_COLONNES_PRODUITS = 3
+HAUTEUR_PASTILLE_CATEGORIE = 84
+HAUTEUR_TUILE_PRODUIT = 118  # un peu plus que la largeur du nom+prix pour laisser
+                              # de la marge quand un nom de produit long doit
+                              # passer sur 2 lignes (voir _dessiner dans styles.py)
+
+# Taille de fenetre adaptee a la zone de travail reelle du poste (hors barre
+# des taches), plafonnee a une taille raisonnable : jamais plus grande que
+# necessaire meme sur un grand ecran, mais reduite automatiquement sur un
+# petit ecran (ex: 1024x768 constate en magasin) au lieu de deborder.
+# Fixe une fois calculee (pas de minsize : c'est un minsize trop grand,
+# ajoute plus tot, qui avait deja annule silencieusement un premier essai
+# de dimensionnement automatique).
+LARGEUR_FENETRE_MAX = 950
+HAUTEUR_FENETRE_MAX = 680
+MARGE_SECURITE_ECRAN = 20  # px retires a la zone de travail detectee, par prudence
+
+
+class CaisseApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Hubert & Pessina - Caisse [{}]".format(VERSION_APP))
+        self.configure(bg=CREME)
+
+        x_ecran, y_ecran, largeur_ecran, hauteur_ecran = zone_travail_windows()
+        if largeur_ecran <= 0 or hauteur_ecran <= 0:
+            # Detection indisponible/anormale : on retombe sur le plafond,
+            # positionne en haut a gauche de l'ecran principal.
+            x_ecran, y_ecran = 0, 0
+            largeur_ecran, hauteur_ecran = LARGEUR_FENETRE_MAX, HAUTEUR_FENETRE_MAX
+
+        largeur = min(largeur_ecran - MARGE_SECURITE_ECRAN, LARGEUR_FENETRE_MAX)
+        hauteur = min(hauteur_ecran - MARGE_SECURITE_ECRAN, HAUTEUR_FENETRE_MAX)
+        x = x_ecran + max((largeur_ecran - largeur) // 2, 0)
+        y = y_ecran + max((hauteur_ecran - hauteur) // 2, 0)
+        self.geometry("{}x{}+{}+{}".format(largeur, hauteur, x, y))
+
+        # Redimensionnable + bouton Maximiser actif : sur Windows, une fois
+        # la fenetre redimensionnable, "Maximiser" agrandit nativement a la
+        # taille reelle de l'ecran sur lequel elle se trouve a cet instant
+        # (gere par Windows lui-meme, correct quel que soit le poste/moniteur).
+        # minsize empeche de la reduire au point de casser l'affichage.
+        self.resizable(True, True)
+        self.minsize(700, 500)
+
+        self.conn = database.get_connection()
+
+        # TVA : taux configures (Sur place / A emporter) + mode de vente
+        # choisi pour le ticket en cours (persiste d'une vente a l'autre,
+        # pour ne pas avoir a re-choisir a chaque client si plusieurs
+        # ventes du meme type se suivent).
+        self.taux_tva = database.obtenir_taux_tva(self.conn)
+        self.mode_vente = "a_emporter"
+
+        # etat de l'ecran de caisse
+        self.categorie_active_id = None
+        self.produit_sous_menu_actif = None  # dict produit si on affiche ses parfums
+
+        # ticket en cours : liste de dicts {nom, prix_unitaire, quantite, tva_fixe}
+        self.ticket = []
+        # remise globale (%) sur le ticket en cours (ex: prix de gros pour
+        # un client) ; remise a zero apres chaque vente encaissee
+        self.remise_pourcentage = 0
+
+        # dernier ticket encaisse : conserve pour permettre une reimpression
+        # a tout moment (bourrage papier, client qui redemande son ticket
+        # apres coup...), y compris apres un redemarrage du logiciel - dans
+        # ce cas on retrouve la derniere vente depuis la base au demarrage.
+        self._dernier_ticket = None
+        self._charger_dernier_ticket_depuis_db()
+
+        self._construire_interface()
+        self._rafraichir_ecran()
+
+    # ------------------------------------------------------------------
+    # Construction de l'interface
+    # ------------------------------------------------------------------
+    def _construire_interface(self):
+        self._construire_entete()
+
+        corps = tk.Frame(self, bg=CREME)
+        corps.pack(side="top", fill="both", expand=True)
+
+        # --- zone de droite : ticket (empaquetee AVANT la zone extensible) ---
+        zone_ticket = tk.Frame(corps, bg=BLANC, width=400)
+        zone_ticket.pack(side="right", fill="y")
+        zone_ticket.pack_propagate(False)
+        self._construire_ticket(zone_ticket)
+
+        # --- zone de gauche : categories OU produits (un seul ecran a la fois,
+        # pour laisser toute la place a de grandes pastilles de categories) ---
+        zone_gauche = tk.Frame(corps, bg=CREME)
+        zone_gauche.pack(side="left", fill="both", expand=True)
+
+        self.zone_produits_scroll = ScrollableFrame(zone_gauche, bg=CREME)
+        self.zone_produits_scroll.pack(side="top", fill="both", expand=True, padx=14, pady=14)
+        self.frame_produits = self.zone_produits_scroll.interior
+        self.frame_produits.bind("<Configure>", self._sur_redimensionnement_frame_produits)
+        self._pastilles_categories_ecran = []  # liste de (widget, largeur) pour le retour a la ligne
+
+    def _construire_entete(self):
+        self.canvas_entete = tk.Canvas(self, height=72, highlightthickness=0, bg=CREME)
+        self.canvas_entete.pack(side="top", fill="x")
+        self.canvas_entete.bind("<Configure>", self._dessiner_entete)
+        self.canvas_entete.bind("<Button-1>", self._sur_clic_entete)
+        self._zones_boutons_entete = {}
+
+    def _dessiner_entete(self, event=None):
+        canvas = self.canvas_entete
+        canvas.delete("all")
+        w = event.width if event else canvas.winfo_width()
+        h = event.height if event else canvas.winfo_height()
+        if w <= 1:
+            return
+
+        c1 = HEADER_DEGRADE_GAUCHE.lstrip("#")
+        c2 = HEADER_DEGRADE_DROITE.lstrip("#")
+        r1, g1, b1 = int(c1[0:2], 16), int(c1[2:4], 16), int(c1[4:6], 16)
+        r2, g2, b2 = int(c2[0:2], 16), int(c2[2:4], 16), int(c2[4:6], 16)
+        pas = 6
+        for x in range(0, w, pas):
+            t = x / float(w)
+            r = int(r1 + (r2 - r1) * t)
+            g = int(g1 + (g2 - g1) * t)
+            b = int(b1 + (b2 - b1) * t)
+            couleur = "#{:02x}{:02x}{:02x}".format(r, g, b)
+            canvas.create_rectangle(x, 0, x + pas, h, fill=couleur, outline=couleur)
+
+        # badge "Temara" en haut a gauche
+        rectangle_arrondi(canvas, 14, 12, 90, 34, 10, fill=OR, outline=OR)
+        canvas.create_text(52, 23, text="Temara", font=POLICE_BADGE, fill=BLANC)
+
+        # titre centre
+        canvas.create_text(w / 2, h / 2 + 6, text="Hubert & Pessina", font=POLICE_TITRE, fill=BLANC)
+
+        # boutons "Historique" / "Recap" / "Admin" en haut a droite (proteges par PIN)
+        self._zones_boutons_entete = {}
+        by1 = 16
+        by2 = by1 + 34
+        bx2 = w - 14
+        for cle, texte in (("admin", "Admin"), ("recap", "Recap"), ("historique", "Historique")):
+            bx1 = bx2 - 90
+            self._zones_boutons_entete[cle] = (bx1, by1, bx2, by2)
+            rectangle_arrondi(canvas, bx1, by1, bx2, by2, 10, fill="#d16a91", outline=BLANC)
+            canvas.create_text((bx1 + bx2) / 2, (by1 + by2) / 2, text=texte, font=POLICE_BADGE, fill=BLANC)
+            bx2 = bx1 - 8
+
+    def _sur_clic_entete(self, event):
+        for cle, (x1, y1, x2, y2) in self._zones_boutons_entete.items():
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                if cle == "admin":
+                    self._demander_pin(self._ouvrir_admin)
+                elif cle == "historique":
+                    self._demander_pin(self._ouvrir_historique)
+                elif cle == "recap":
+                    self._demander_pin(self._ouvrir_recap)
+                return
+
+    def _demander_pin(self, callback_si_correct):
+        def verifier(code_saisi):
+            pin_reel = self.conn.execute(
+                "SELECT valeur FROM config WHERE cle = 'pin_admin'"
+            ).fetchone()["valeur"]
+            if code_saisi != pin_reel:
+                messagebox.showerror("Code incorrect", "Le code PIN est incorrect.")
+                return
+            callback_si_correct()
+
+        PaveNumerique(
+            self, titre="Code PIN", callback_validation=verifier,
+            masquer=True, chiffres_max=4, longueur_exacte=4, renvoyer_texte=True,
+        )
+
+    def _ouvrir_admin(self):
+        fenetre_admin = FenetreAdmin(self, self.conn)
+        self.wait_window(fenetre_admin)
+        # le catalogue et/ou les taux de TVA ont pu changer
+        self.categorie_active_id = None
+        self.produit_sous_menu_actif = None
+        self.taux_tva = database.obtenir_taux_tva(self.conn)
+        self._rafraichir_ecran()
+        self._rafraichir_ticket()
+
+    def _ouvrir_historique(self):
+        FenetreHistorique(self, self.conn)
+
+    def _ouvrir_recap(self):
+        FenetreRecap(self, self.conn)
+
+    def _construire_ticket(self, zone_ticket):
+        # Les zones du haut et du bas ont une taille FIXE (pack_propagate
+        # desactive) : sur un petit ecran (1024x768 constate en magasin),
+        # sans cela le gestionnaire pack peut se mettre a compresser
+        # ENCAISSER et les autres boutons bien en-dessous de leur taille
+        # prevue plutot que de les garder lisibles/cliquables. Seule la
+        # liste des articles au milieu (zone_lignes_scroll) est elastique :
+        # c'est elle qui retrecit (avec defilement) si la place manque.
+        zone_haut = tk.Frame(zone_ticket, bg=BLANC, height=160)
+        zone_haut.pack(side="top", fill="x")
+        zone_haut.pack_propagate(False)
+
+        tk.Label(
+            zone_haut, text="Ticket en cours", font=POLICE_TICKET_TITRE,
+            bg=BLANC, fg=BRUN_700, pady=8,
+        ).pack(side="top", fill="x")
+
+        cadre_mode = tk.Frame(zone_haut, bg=BLANC)
+        cadre_mode.pack(side="top", fill="x", padx=14, pady=(0, 8))
+        self.boutons_mode_vente = {}
+        for mode, texte in (("sur_place", "Sur place"), ("a_emporter", "A emporter")):
+            bouton = BoutonArrondi(
+                cadre_mode, lignes=[(texte, POLICE_BOUTON_ROND, BRUN_700)],
+                commande=lambda m=mode: self._definir_mode_vente(m),
+                largeur=170, hauteur=44, rayon=10,
+                couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=BLANC,
+            )
+            bouton.pack(side="left", fill="x", expand=True, padx=4)
+            self.boutons_mode_vente[mode] = bouton
+        self._rafraichir_mode_vente()
+
+        # Reimpression a tout moment de la derniere vente encaissee (client
+        # qui redemande son ticket apres coup) : toujours accessible sans
+        # avoir a repasser par le popup de fin d'encaissement.
+        BoutonArrondi(
+            zone_haut, lignes=[("Dernier ticket", POLICE_BOUTON_ROND, BRUN_700)],
+            commande=self._imprimer_dernier_ticket, largeur=372, hauteur=32, rayon=8,
+            couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=BLANC,
+        ).pack(side="top", padx=14)
+
+        self.zone_lignes_scroll = ScrollableFrame(zone_ticket, bg=BLANC)
+        self.zone_lignes_scroll.pack(side="top", fill="both", expand=True, padx=10)
+        self.frame_lignes_ticket = self.zone_lignes_scroll.interior
+
+        bas_ticket = tk.Frame(zone_ticket, bg=BLANC, height=225)
+        bas_ticket.pack(side="bottom", fill="x", padx=14, pady=(0, 16))
+        bas_ticket.pack_propagate(False)
+
+        separateur = tk.Frame(bas_ticket, bg=BRUN_700, height=2)
+        separateur.pack(side="top", fill="x", pady=(6, 8))
+
+        self.label_ht = tk.Label(
+            bas_ticket, text="Total HT : 0 DH", font=POLICE_TICKET_DETAIL,
+            bg=BLANC, fg=BRUN_500, anchor="e",
+        )
+        self.label_ht.pack(side="top", fill="x")
+
+        self.label_tva = tk.Label(
+            bas_ticket, text="TVA : 0 DH", font=POLICE_TICKET_DETAIL,
+            bg=BLANC, fg=BRUN_500, anchor="e",
+        )
+        self.label_tva.pack(side="top", fill="x", pady=(0, 4))
+
+        # Remise globale (%) sur le ticket en cours (ex: prix de gros pour
+        # un client qui prend plusieurs gateaux) : appliquee juste avant
+        # l'encaissement, sur le total complet.
+        cadre_remise = tk.Frame(bas_ticket, bg=BLANC)
+        cadre_remise.pack(side="top", fill="x", pady=(0, 4))
+        self.label_remise = tk.Label(
+            cadre_remise, text="Remise : aucune", font=POLICE_TICKET_DETAIL,
+            bg=BLANC, fg=BRUN_500, anchor="w",
+        )
+        self.label_remise.pack(side="left")
+        self.bouton_retirer_remise = BoutonArrondi(
+            cadre_remise, lignes=[("X", POLICE_BOUTON_ROND, BLANC)],
+            commande=self._retirer_remise, largeur=28, hauteur=28, rayon=8,
+            couleur_fond=ROUGE, couleur_bordure=ROUGE, bg=BLANC,
+        )
+        BoutonArrondi(
+            cadre_remise, lignes=[("Remise %", POLICE_BOUTON_ROND, BLANC)],
+            commande=self._ouvrir_remise, largeur=100, hauteur=28, rayon=8,
+            couleur_fond=OR, couleur_bordure=OR, bg=BLANC,
+        ).pack(side="right")
+
+        self.label_total = tk.Label(
+            bas_ticket, text="Total TTC : 0 DH", font=POLICE_TOTAL,
+            bg=BLANC, fg=BRUN_800, anchor="e",
+        )
+        self.label_total.pack(side="top", fill="x", pady=(0, 10))
+
+        self.bouton_encaisser = BoutonArrondi(
+            bas_ticket, lignes=[("ENCAISSER", POLICE_ENCAISSER, BLANC)],
+            commande=self._encaisser, largeur=372, hauteur=64, rayon=12,
+            couleur_fond=VERT, couleur_bordure=VERT, bg=BLANC,
+        )
+        self.bouton_encaisser.pack(side="top", fill="x")
+
+    def _definir_mode_vente(self, mode):
+        self.mode_vente = mode
+        self._rafraichir_mode_vente()
+        self._rafraichir_ticket()
+
+    def _rafraichir_mode_vente(self):
+        for mode, bouton in self.boutons_mode_vente.items():
+            actif = (mode == self.mode_vente)
+            texte = "Sur place" if mode == "sur_place" else "A emporter"
+            bouton.definir_lignes([(texte, POLICE_BOUTON_ROND, BLANC if actif else BRUN_700)])
+            bouton.definir_fond(BRUN_700 if actif else BLANC, BRUN_700 if actif else BRUN_200)
+
+    # ------------------------------------------------------------------
+    # Navigation : ecran categories <-> ecran produits <-> ecran parfums
+    # ------------------------------------------------------------------
+    def _rafraichir_ecran(self):
+        for widget in self.frame_produits.winfo_children():
+            widget.destroy()
+        self._pastilles_categories_ecran = []
+
+        if self.categorie_active_id is None:
+            self._construire_selection_categories()
+        elif self.produit_sous_menu_actif is not None:
+            self._construire_vue_sous_menu(self.produit_sous_menu_actif)
+        else:
+            self._construire_grille_produits()
+
+    def _construire_selection_categories(self):
+        """Grand ecran d'accueil : uniquement les pastilles de categories,
+        compactes mais bien lisibles/cliquables, sur autant de lignes que
+        necessaire (comme du texte qui retourne a la ligne) pour ne jamais
+        deborder de l'ecran."""
+        categories = self.conn.execute("SELECT * FROM categories ORDER BY ordre, id").fetchall()
+        for cat in categories:
+            largeur = largeur_texte(cat["nom"], POLICE_CATEGORIE_CAISSE) + 72
+            bouton = BoutonArrondi(
+                self.frame_produits,
+                lignes=[(cat["nom"], POLICE_CATEGORIE_CAISSE, BRUN_700)],
+                commande=lambda cid=cat["id"]: self._selectionner_categorie(cid),
+                largeur=largeur, hauteur=HAUTEUR_PASTILLE_CATEGORIE, rayon=HAUTEUR_PASTILLE_CATEGORIE // 2,
+                couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=CREME,
+            )
+            self._pastilles_categories_ecran.append((bouton, largeur))
+        self._positionner_pastilles_categories(self.frame_produits.winfo_width())
+
+    def _positionner_pastilles_categories(self, largeur_dispo):
+        if largeur_dispo <= 1 or not self._pastilles_categories_ecran:
+            return
+        espace = 14
+        x = 0
+        y = 0
+        for widget, largeur in self._pastilles_categories_ecran:
+            if x > 0 and x + largeur > largeur_dispo:
+                x = 0
+                y += HAUTEUR_PASTILLE_CATEGORIE + espace
+            widget.place(x=x, y=y, width=largeur, height=HAUTEUR_PASTILLE_CATEGORIE)
+            x += largeur + espace
+
+        # place() ne fait pas grandir automatiquement son conteneur (contrairement
+        # a grid) : sans ceci, le cadre reste minuscule et les pastilles, bien que
+        # "placees", restent invisibles car en dehors de la zone visible/defilante.
+        # NB: on configure toujours (pas de garde "si different") car cget("height")
+        # ne reflete que la derniere valeur explicitement configuree, pas la taille
+        # reelle actuelle quand l'ecran produits (gere par grid) est passe par la
+        # entre-temps : une garde basee dessus sauterait a tort la mise a jour.
+        self.frame_produits.configure(height=y + HAUTEUR_PASTILLE_CATEGORIE)
+
+    def _sur_redimensionnement_frame_produits(self, event):
+        if self.categorie_active_id is None:
+            self._positionner_pastilles_categories(event.width)
+
+    def _selectionner_categorie(self, categorie_id):
+        self.categorie_active_id = categorie_id
+        self.produit_sous_menu_actif = None
+        self._rafraichir_ecran()
+
+    def _retour_categories(self):
+        self.categorie_active_id = None
+        self.produit_sous_menu_actif = None
+        self._rafraichir_ecran()
+
+    def _creer_tuile_produit(self, parent, nom, prix, hint=None):
+        """Cree une tuile produit/parfum avec son badge de quantite."""
+        if hint:
+            lignes = [
+                (nom, POLICE_PRODUIT_NOM, BRUN_800),
+                (hint, POLICE_PRODUIT_HINT, OR),
+            ]
+        else:
+            lignes = [
+                (nom, POLICE_PRODUIT_NOM, BRUN_800),
+                ("{:g} DH".format(prix), POLICE_PRODUIT_PRIX, OR),
+            ]
+        return lignes
+
+    def _construire_grille_produits(self):
+        categorie = self.conn.execute(
+            "SELECT * FROM categories WHERE id = ?", (self.categorie_active_id,)
+        ).fetchone()
+        if categorie is None:  # categorie supprimee entre-temps (import, etc.)
+            self._retour_categories()
+            return
+
+        BoutonArrondi(
+            self.frame_produits, lignes=[("< Categories", POLICE_CATEGORIE, BLANC)],
+            commande=self._retour_categories, largeur=210, hauteur=52, rayon=12,
+            couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=CREME,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 14))
+        tk.Label(
+            self.frame_produits, text=categorie["nom"], font=POLICE_SOUS_TITRE,
+            bg=CREME, fg=BRUN_700,
+        ).grid(row=0, column=1, columnspan=NB_COLONNES_PRODUITS - 1, sticky="w", pady=(0, 14))
+
+        produits = self.conn.execute(
+            "SELECT * FROM produits WHERE categorie_id = ? ORDER BY id",
+            (self.categorie_active_id,),
+        ).fetchall()
+
+        for index, produit in enumerate(produits):
+            ligne, colonne = divmod(index, NB_COLONNES_PRODUITS)
+            ligne += 1  # decale d'une ligne pour laisser la place au bouton "< Categories"
+
+            if produit["a_des_sous_produits"]:
+                lignes = self._creer_tuile_produit(self.frame_produits, produit["nom"], None,
+                                                    hint="Voir les parfums >")
+                commande = lambda p=produit: self._ouvrir_sous_menu(p)
+                commande_qte = None  # pas de quantite directe sur un produit sans prix propre
+            else:
+                lignes = self._creer_tuile_produit(self.frame_produits, produit["nom"], produit["prix"])
+                nom_p, prix_p, tva_p = produit["nom"], produit["prix"], produit["tva_fixe"]
+                commande = lambda nom=nom_p, prix=prix_p, tva=tva_p: self._ajouter_au_ticket(nom, prix, 1, tva)
+                commande_qte = lambda nom=nom_p, prix=prix_p, tva=tva_p: self._ouvrir_pave_quantite(nom, prix, tva)
+
+            tuile = BoutonArrondi(
+                self.frame_produits, lignes=lignes, commande=commande,
+                largeur=225, hauteur=HAUTEUR_TUILE_PRODUIT, rayon=14,
+                couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=CREME,
+                commande_quantite=commande_qte,
+            )
+            tuile.grid(row=ligne, column=colonne, sticky="nsew", padx=6, pady=6)
+
+        for c in range(NB_COLONNES_PRODUITS):
+            self.frame_produits.grid_columnconfigure(c, weight=1)
+
+    def _construire_vue_sous_menu(self, produit):
+        tk.Label(
+            self.frame_produits, text=produit["nom"], font=POLICE_SOUS_TITRE,
+            bg=CREME, fg=BRUN_700,
+        ).grid(row=0, column=0, columnspan=NB_COLONNES_PRODUITS, sticky="w", pady=(0, 10))
+
+        sous_produits = self.conn.execute(
+            "SELECT * FROM sous_produits WHERE produit_id = ? ORDER BY id",
+            (produit["id"],),
+        ).fetchall()
+
+        for index, sp in enumerate(sous_produits):
+            ligne, colonne = divmod(index, NB_COLONNES_PRODUITS)
+            nom_complet = "{} {}".format(produit["nom"], sp["nom"])
+            lignes = self._creer_tuile_produit(self.frame_produits, sp["nom"], sp["prix"])
+            # un parfum/sous-produit suit le meme regime de TVA que son
+            # produit parent (pas de reglage individuel par parfum)
+            prix_sp, tva_sp = sp["prix"], produit["tva_fixe"]
+            commande = lambda nom=nom_complet, prix=prix_sp, tva=tva_sp: self._ajouter_au_ticket(nom, prix, 1, tva)
+            commande_qte = lambda nom=nom_complet, prix=prix_sp, tva=tva_sp: self._ouvrir_pave_quantite(nom, prix, tva)
+            tuile = BoutonArrondi(
+                self.frame_produits, lignes=lignes, commande=commande,
+                largeur=225, hauteur=HAUTEUR_TUILE_PRODUIT, rayon=14,
+                couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=CREME,
+                commande_quantite=commande_qte,
+            )
+            tuile.grid(row=ligne + 1, column=colonne, sticky="nsew", padx=6, pady=6)
+
+        for c in range(NB_COLONNES_PRODUITS):
+            self.frame_produits.grid_columnconfigure(c, weight=1)
+
+        nb_lignes_parfums = -(-len(sous_produits) // NB_COLONNES_PRODUITS)  # arrondi superieur
+        bouton_retour = BoutonArrondi(
+            self.frame_produits, lignes=[("< Retour", POLICE_CATEGORIE, BLANC)],
+            commande=self._fermer_sous_menu, largeur=200, hauteur=52, rayon=12,
+            couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=CREME,
+        )
+        bouton_retour.grid(row=nb_lignes_parfums + 1, column=0, sticky="w", pady=(10, 0))
+
+    def _ouvrir_sous_menu(self, produit):
+        self.produit_sous_menu_actif = produit
+        self._rafraichir_ecran()
+
+    def _fermer_sous_menu(self):
+        self.produit_sous_menu_actif = None
+        self._rafraichir_ecran()
+
+    def _ouvrir_pave_quantite(self, nom, prix_unitaire, tva_fixe=None):
+        PaveNumerique(
+            self, titre="Quantite : {}".format(nom),
+            callback_validation=lambda quantite: self._ajouter_au_ticket(nom, prix_unitaire, quantite, tva_fixe),
+            validation_auto=True,
+        )
+
+    # ------------------------------------------------------------------
+    # Ticket
+    # ------------------------------------------------------------------
+    def _taux_pour_ligne(self, ligne):
+        """Taux de TVA (%) effectif pour une ligne de ticket : celui du
+        produit s'il en a un fixe (ex: 0% pour le pain), sinon celui du
+        mode de vente en cours (Sur place / A emporter)."""
+        if ligne["tva_fixe"] is not None:
+            return ligne["tva_fixe"]
+        return self.taux_tva[self.mode_vente]
+
+    def _ajouter_au_ticket(self, nom, prix_unitaire, quantite, tva_fixe=None):
+        for ligne in self.ticket:
+            if ligne["nom"] == nom and ligne["prix_unitaire"] == prix_unitaire and ligne["tva_fixe"] == tva_fixe:
+                ligne["quantite"] += quantite
+                self._rafraichir_ticket()
+                return
+        self.ticket.append({"nom": nom, "prix_unitaire": prix_unitaire, "quantite": quantite, "tva_fixe": tva_fixe})
+        self._rafraichir_ticket()
+
+    def _retirer_unite(self, index):
+        self.ticket[index]["quantite"] -= 1
+        if self.ticket[index]["quantite"] <= 0:
+            del self.ticket[index]
+        self._rafraichir_ticket()
+
+    def _supprimer_ligne(self, index):
+        del self.ticket[index]
+        self._rafraichir_ticket()
+
+    def _rafraichir_ticket(self):
+        for widget in self.frame_lignes_ticket.winfo_children():
+            widget.destroy()
+
+        for index, ligne in enumerate(self.ticket):
+            sous_total = ligne["quantite"] * ligne["prix_unitaire"]
+
+            cadre_ligne = tk.Frame(self.frame_lignes_ticket, bg=BLANC)
+            cadre_ligne.pack(side="top", fill="x", pady=(6, 0))
+
+            tk.Label(cadre_ligne, text=ligne["nom"], font=POLICE_TICKET_NOM,
+                     bg=BLANC, fg=BRUN_800, anchor="w", wraplength=220,
+                     justify="left").pack(side="top", fill="x")
+
+            bas = tk.Frame(cadre_ligne, bg=BLANC)
+            bas.pack(side="top", fill="x", pady=(2, 6))
+            tk.Label(bas, text="{:g} x {:g} DH = {:g} DH".format(
+                ligne["quantite"], ligne["prix_unitaire"], sous_total),
+                font=POLICE_TICKET_DETAIL, bg=BLANC, fg=BRUN_500,
+            ).pack(side="left")
+
+            BoutonArrondi(
+                bas, lignes=[("-1", POLICE_BOUTON_ROND, BLANC)],
+                commande=lambda i=index: self._retirer_unite(i),
+                largeur=40, hauteur=40, rayon=20,
+                couleur_fond=OR, couleur_bordure=OR, bg=BLANC,
+            ).pack(side="right", padx=(4, 0))
+            BoutonArrondi(
+                bas, lignes=[("X", POLICE_BOUTON_ROND, BLANC)],
+                commande=lambda i=index: self._supprimer_ligne(i),
+                largeur=40, hauteur=40, rayon=20,
+                couleur_fond=ROUGE, couleur_bordure=ROUGE, bg=BLANC,
+            ).pack(side="right", padx=(4, 0))
+
+            # separateur en tirets, comme sur la maquette du client
+            canvas_tirets = tk.Canvas(self.frame_lignes_ticket, height=2, bg=BLANC, highlightthickness=0)
+            canvas_tirets.pack(side="top", fill="x")
+            canvas_tirets.bind(
+                "<Configure>",
+                lambda e, c=canvas_tirets: (c.delete("all"), c.create_line(0, 1, e.width, 1, dash=(4, 3), fill=BRUN_200)),
+            )
+
+        total_ht, total_tva, total_ttc, _ = self._totaux_ticket()
+        self.label_ht.configure(text="Total HT : {:.2f} DH".format(total_ht))
+        self.label_tva.configure(text="TVA : {:.2f} DH".format(total_tva))
+        self.label_total.configure(text="Total TTC : {:.2f} DH".format(total_ttc))
+
+        if self.remise_pourcentage > 0:
+            self.label_remise.configure(text="Remise : -{:g}%".format(self.remise_pourcentage))
+            self.bouton_retirer_remise.pack(side="left", padx=(8, 0))
+        else:
+            self.label_remise.configure(text="Remise : aucune")
+            self.bouton_retirer_remise.pack_forget()
+
+    # ------------------------------------------------------------------
+    # Encaissement
+    # ------------------------------------------------------------------
+    def _repartition_tva(self):
+        """Regroupe les lignes du ticket par taux de TVA effectif (un ticket
+        peut melanger plusieurs taux : ex. pain a 0% + patisserie a 10/20%),
+        pour afficher chaque taux applique separement sur le ticket imprime."""
+        groupes = {}
+        for ligne in self.ticket:
+            taux = self._taux_pour_ligne(ligne)
+            sous_total_ttc = ligne["quantite"] * ligne["prix_unitaire"]
+            sous_total_ht = sous_total_ttc / (1 + taux / 100)
+            montant_tva = sous_total_ttc - sous_total_ht
+            groupe = groupes.setdefault(taux, {"taux": taux, "base_ht": 0.0, "montant": 0.0})
+            groupe["base_ht"] += sous_total_ht
+            groupe["montant"] += montant_tva
+        return [groupes[taux] for taux in sorted(groupes)]
+
+    def _totaux_ticket(self):
+        """Totaux du ticket en cours (HT, TVA, TTC, repartition par taux),
+        remise globale (%) deja appliquee uniformement sur chaque taux."""
+        repartition_brute = self._repartition_tva()
+        facteur = 1 - (self.remise_pourcentage / 100)
+        repartition_tva = [
+            {"taux": g["taux"], "base_ht": g["base_ht"] * facteur, "montant": g["montant"] * facteur}
+            for g in repartition_brute
+        ]
+        total_ht = sum(g["base_ht"] for g in repartition_tva)
+        total_tva = sum(g["montant"] for g in repartition_tva)
+        total_ttc = total_ht + total_tva
+        return total_ht, total_tva, total_ttc, repartition_tva
+
+    def _ouvrir_remise(self):
+        PaveNumerique(
+            self, titre="Remise sur le ticket (%)",
+            callback_validation=self._definir_remise,
+            chiffres_max=5, permettre_decimales=True,
+        )
+
+    def _definir_remise(self, valeur):
+        self.remise_pourcentage = min(valeur, 100)
+        self._rafraichir_ticket()
+
+    def _retirer_remise(self):
+        self.remise_pourcentage = 0
+        self._rafraichir_ticket()
+
+    def _encaisser(self):
+        if not self.ticket:
+            messagebox.showinfo("Ticket vide", "Aucun article dans le ticket.")
+            return
+        self._demander_mode_paiement(self._finaliser_encaissement)
+
+    def _demander_mode_paiement(self, callback):
+        popup = tk.Toplevel(self)
+        popup.title("Mode de paiement")
+        popup.configure(bg=BLANC)
+        popup.resizable(False, False)
+        popup.transient(self)
+
+        largeur, hauteur = 380, 300
+        x = self.winfo_rootx() + (self.winfo_width() - largeur) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - hauteur) // 2
+        popup.geometry("{}x{}+{}+{}".format(largeur, hauteur, max(x, 0), max(y, 0)))
+
+        tk.Label(popup, text="Mode de paiement", font=POLICE_SOUS_TITRE, bg=BLANC, fg=BRUN_700,
+                 pady=14).pack(fill="x")
+
+        def choisir(mode):
+            popup.destroy()
+            callback(mode)
+
+        BoutonArrondi(
+            popup, lignes=[("ESPECES", POLICE_ENCAISSER, BLANC)], commande=lambda: choisir("especes"),
+            largeur=300, hauteur=68, rayon=14, couleur_fond=VERT, couleur_bordure=VERT, bg=BLANC,
+        ).pack(pady=(6, 10))
+        BoutonArrondi(
+            popup, lignes=[("CARTE", POLICE_ENCAISSER, BLANC)], commande=lambda: choisir("carte"),
+            largeur=300, hauteur=68, rayon=14, couleur_fond=OR, couleur_bordure=OR, bg=BLANC,
+        ).pack(pady=(0, 14))
+        BoutonArrondi(
+            popup, lignes=[("Annuler", POLICE_CATEGORIE, BLANC)], commande=popup.destroy,
+            largeur=300, hauteur=48, rayon=12, couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=BLANC,
+        ).pack()
+
+        popup.grab_set()
+
+    def _finaliser_encaissement(self, mode_paiement):
+        total_ht, total_tva, total_ttc, repartition_tva = self._totaux_ticket()
+        remise_pourcentage = self.remise_pourcentage
+        maintenant = datetime.now()
+
+        curseur = self.conn.execute(
+            "INSERT INTO ventes (date, heure, total, note, mode_vente, total_ht, total_tva, "
+            "mode_paiement, remise_pourcentage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (maintenant.strftime("%Y-%m-%d"), maintenant.strftime("%H:%M:%S"), total_ttc, None,
+             self.mode_vente, total_ht, total_tva, mode_paiement, remise_pourcentage),
+        )
+        vente_id = curseur.lastrowid
+        for ligne in self.ticket:
+            # prix nominal (avant remise) : la remise n'est appliquee qu'au
+            # niveau des totaux de la vente, pas ligne par ligne
+            self.conn.execute(
+                "INSERT INTO vente_lignes (vente_id, nom_produit, quantite, prix_unitaire, taux_tva) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (vente_id, ligne["nom"], ligne["quantite"], ligne["prix_unitaire"], self._taux_pour_ligne(ligne)),
+            )
+        self.conn.commit()
+
+        # L'impression n'est jamais automatique : elle ne part que si le
+        # caissier appuie explicitement sur "Imprimer le ticket" (dans le
+        # popup de confirmation qui suit, ou plus tard via "Dernier ticket").
+        self._dernier_ticket = {
+            "lignes": list(self.ticket),
+            "mode_vente": self.mode_vente,
+            "mode_paiement": mode_paiement,
+            "repartition_tva": repartition_tva,
+            "remise_pourcentage": remise_pourcentage,
+            "total_ht": total_ht,
+            "total_tva": total_tva,
+            "total_ttc": total_ttc,
+            "date_heure": maintenant.strftime("%d/%m/%Y %H:%M"),
+        }
+
+        self._afficher_confirmation_encaissement(total_ttc)
+
+        self.ticket = []
+        self.remise_pourcentage = 0
+        self._rafraichir_ticket()
+
+    def _charger_dernier_ticket_depuis_db(self):
+        """Reconstruit `self._dernier_ticket` a partir de la derniere vente
+        enregistree en base, pour que "Dernier ticket" fonctionne meme apres
+        un redemarrage du logiciel (client qui redemande son ticket plus
+        tard). Utilise le taux de TVA fige au moment de la vente (colonne
+        vente_lignes.taux_tva), jamais le taux courant."""
+        vente = self.conn.execute("SELECT * FROM ventes ORDER BY id DESC LIMIT 1").fetchone()
+        if vente is None:
+            return
+        lignes_db = self.conn.execute(
+            "SELECT * FROM vente_lignes WHERE vente_id = ? ORDER BY id", (vente["id"],)
+        ).fetchall()
+        if not lignes_db:
+            return
+
+        # les lignes gardent leur prix nominal (avant remise) : on applique
+        # ici le meme facteur de remise que celui fige au moment de la
+        # vente pour retrouver la repartition de TVA telle qu'imprimee
+        remise_pourcentage = vente["remise_pourcentage"] or 0
+        facteur = 1 - (remise_pourcentage / 100)
+        groupes = {}
+        for ligne in lignes_db:
+            taux = ligne["taux_tva"] if ligne["taux_tva"] is not None else 0
+            sous_total_ttc = ligne["quantite"] * ligne["prix_unitaire"]
+            sous_total_ht = sous_total_ttc / (1 + taux / 100)
+            montant_tva = sous_total_ttc - sous_total_ht
+            groupe = groupes.setdefault(taux, {"taux": taux, "base_ht": 0.0, "montant": 0.0})
+            groupe["base_ht"] += sous_total_ht * facteur
+            groupe["montant"] += montant_tva * facteur
+
+        try:
+            date_heure = datetime.strptime(
+                "{} {}".format(vente["date"], vente["heure"]), "%Y-%m-%d %H:%M:%S"
+            ).strftime("%d/%m/%Y %H:%M")
+        except ValueError:
+            date_heure = "{} {}".format(vente["date"], vente["heure"])
+
+        self._dernier_ticket = {
+            "lignes": [
+                {"nom": l["nom_produit"], "prix_unitaire": l["prix_unitaire"], "quantite": l["quantite"]}
+                for l in lignes_db
+            ],
+            "mode_vente": vente["mode_vente"] or "a_emporter",
+            "mode_paiement": vente["mode_paiement"] or "especes",
+            "repartition_tva": [groupes[taux] for taux in sorted(groupes)],
+            "remise_pourcentage": remise_pourcentage,
+            "total_ht": vente["total_ht"] if vente["total_ht"] is not None else vente["total"],
+            "total_tva": vente["total_tva"] if vente["total_tva"] is not None else 0,
+            "total_ttc": vente["total"],
+            "date_heure": date_heure,
+        }
+
+    def _imprimer_dernier_ticket(self):
+        if self._dernier_ticket is None:
+            messagebox.showinfo("Aucun ticket", "Aucune vente n'a encore ete enregistree.")
+            return
+        t = self._dernier_ticket
+        nom_imprimante = database.obtenir_nom_imprimante(self.conn)
+        try:
+            impression.imprimer_ticket(
+                nom_imprimante, t["lignes"], t["mode_vente"], t["mode_paiement"],
+                t["repartition_tva"], t["total_ht"], t["total_tva"], t["total_ttc"],
+                t["date_heure"], chemin_logo=database.obtenir_chemin_logo(self.conn) or None,
+                remise_pourcentage=t.get("remise_pourcentage", 0),
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur impression",
+                "Impossible d'imprimer le ticket sur '{}' :\n{}\n\n"
+                "Verifiez que l'imprimante est allumee, branchee et selectionnee "
+                "dans le Mode Admin.".format(nom_imprimante, exc),
+            )
+
+    def _afficher_confirmation_encaissement(self, total):
+        """Grande confirmation visuelle (plus lisible qu'une boite de dialogue
+        systeme standard). Reste affichee tant que le bouton OK n'est pas
+        presse (et bloque le reste de l'ecran pendant ce temps) : une mouche
+        ou un effleurement accidentel sur l'ecran tactile ne peut donc pas la
+        faire disparaitre ni declencher autre chose derriere."""
+        popup = tk.Toplevel(self)
+        popup.overrideredirect(True)
+        popup.attributes("-topmost", True)
+        popup.configure(bg=VERT)
+
+        largeur, hauteur = 560, 480
+        x = self.winfo_rootx() + (self.winfo_width() - largeur) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - hauteur) // 2
+        popup.geometry("{}x{}+{}+{}".format(largeur, hauteur, x, y))
+
+        tk.Label(popup, text="Vente encaissee", font=("Segoe UI", 30, "bold"),
+                 bg=VERT, fg=BLANC).pack(pady=(40, 10))
+        tk.Label(popup, text="{:g} DH".format(total), font=("Georgia", 64, "bold"),
+                 bg=VERT, fg=BLANC).pack(pady=(0, 30))
+
+        BoutonArrondi(
+            popup, lignes=[("Imprimer le ticket", ("Segoe UI", 16, "bold"), VERT)],
+            commande=self._imprimer_dernier_ticket, largeur=320, hauteur=54, rayon=14,
+            couleur_fond=BLANC, couleur_bordure=BLANC, bg=VERT,
+        ).pack(pady=(0, 14))
+        BoutonArrondi(
+            popup, lignes=[("OK", ("Segoe UI", 26, "bold"), VERT)],
+            commande=popup.destroy, largeur=220, hauteur=70, rayon=16,
+            couleur_fond=BLANC, couleur_bordure=BLANC, bg=VERT,
+        ).pack()
+
+        popup.grab_set()  # bloque le reste de l'ecran tant que OK n'est pas presse
+
+
+def _ecrire_diagnostic_demarrage():
+    """Affiche + enregistre (diagnostic_ecran.log, a cote du programme) la
+    version lancee et ce que Windows/Tkinter detectent sur ce poste. Sert a
+    verifier a distance, sans ambiguite, si un probleme d'affichage vient
+    d'une mauvaise detection d'ecran ou d'autre chose (ex: ancienne version
+    encore lancee par erreur)."""
+    dossier = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
+        else os.path.dirname(os.path.abspath(__file__))
+    texte = "Version app : {}\nTaille fenetre max autorisee : {}x{}\n{}".format(
+        VERSION_APP, LARGEUR_FENETRE_MAX, HAUTEUR_FENETRE_MAX, diagnostiquer_ecran(),
+    )
+    print("=== Diagnostic ecran ===")
+    print(texte)
+    print("========================")
+    try:
+        chemin_log = os.path.join(dossier, "diagnostic_ecran.log")
+        with open(chemin_log, "w", encoding="utf-8") as f:
+            f.write(texte + "\n")
+    except OSError as exc:
+        print("(Impossible d'ecrire diagnostic_ecran.log : {})".format(exc))
+
+
+if __name__ == "__main__":
+    definir_dpi_awareness()
+    _ecrire_diagnostic_demarrage()
+
+    conn_init = database.get_connection()
+    database.init_db(conn_init)
+    database.seed_test_data(conn_init)
+    conn_init.close()
+
+    app = CaisseApp()
+    app.mainloop()
