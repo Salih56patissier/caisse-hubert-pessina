@@ -32,6 +32,27 @@ BLANC = "#ffffff"
 HEADER_DEGRADE_GAUCHE = "#e75480"
 HEADER_DEGRADE_DROITE = "#c2185b"
 
+# Une couleur distincte par categorie (dans l'ordre), pour les reperer d'un
+# coup d'oeil sur l'ecran de caisse plutot que devoir lire chaque etiquette.
+# Cycle si plus de categories que de couleurs. Toutes assez saturees/foncees
+# pour rester lisibles avec du texte blanc par-dessus.
+COULEURS_CATEGORIES = [
+    OR,        # or
+    VERT,      # vert
+    ROUGE,     # terracotta
+    "#e75480", # rose
+    BRUN_500,  # brun
+    "#3d7ea6", # bleu ardoise
+    "#8e5572", # prune
+    "#3f8f7f", # sarcelle
+    "#b8860b", # moutarde
+]
+
+# Place reservee en haut d'une tuile quand elle a un badge de quantite
+# ("123", coin superieur droit) : le texte de la tuile doit rester sous
+# cette zone (voir BoutonArrondi._dessiner) - largeur du badge + marges.
+MARGE_BADGE_QUANTITE = 48
+
 POLICE_TITRE = ("Georgia", 26, "bold")
 POLICE_BADGE = ("Segoe UI", 10, "bold")
 POLICE_TICKET_TITRE = ("Georgia", 17, "bold")
@@ -210,14 +231,29 @@ class BoutonArrondi(tk.Canvas):
         # d'origine. Decaler verticalement laisse toute la largeur au texte.
         bw, bh = 58, 36
         marge_badge_haut = 6
-        decalage_bas = marge_badge_haut + bh + 6 if self.commande_quantite else 0
+        decalage_bas = MARGE_BADGE_QUANTITE if self.commande_quantite else 0
 
-        nb = len(self.lignes)
-        hauteur_texte = h - decalage_bas
-        for i, (texte, police, couleur) in enumerate(self.lignes):
-            y = decalage_bas + hauteur_texte * (i + 1) / (nb + 1)
-            self.create_text(w / 2, y, text=texte, font=police, fill=couleur,
+        # Repartition verticale basee sur la vraie hauteur de chaque ligne
+        # (chaque ligne peut avoir sa propre police/taille, notamment sur
+        # les tuiles produits dont la police s'agrandit avec la tuile) :
+        # diviser l'espace en parts egales, comme avant, ne tenait pas
+        # compte de la taille reelle du texte et pouvait faire chevaucher
+        # deux lignes des qu'une police etait agrandie.
+        zone_haut = decalage_bas
+        zone_hauteur = h - decalage_bas
+        # tkfont.Font(font=police) laisse Tk interpreter directement le tuple
+        # (family, taille, style...) : le style peut etre "bold", "italic"
+        # ou les deux, contrairement a un mapping manuel vers weight= qui ne
+        # comprend pas "italic" et plantait sur les lignes en italique.
+        hauteurs_lignes = [tkfont.Font(font=police).metrics("linespace") for _, police, _ in self.lignes]
+        espace_extra = max(zone_hauteur - sum(hauteurs_lignes), 0)
+        interligne = espace_extra / (len(self.lignes) + 1) if self.lignes else 0
+
+        y = zone_haut + interligne
+        for (texte, police, couleur), hauteur_ligne in zip(self.lignes, hauteurs_lignes):
+            self.create_text(w / 2, y + hauteur_ligne / 2, text=texte, font=police, fill=couleur,
                               justify="center", width=w - 12)
+            y += hauteur_ligne + interligne
 
         if self.commande_quantite:
             bx2, by1 = w - 6, marge_badge_haut
@@ -241,8 +277,107 @@ class BoutonArrondi(tk.Canvas):
 
 
 def largeur_texte(texte, police):
-    return tkfont.Font(family=police[0], size=police[1],
-                        weight=police[2] if len(police) > 2 else "normal").measure(texte)
+    return tkfont.Font(font=police).measure(texte)
+
+
+def calculer_grille_adaptative(nombre_elements, largeur_dispo, hauteur_dispo, espace=14,
+                                largeur_min=120, largeur_max=520, hauteur_min=70, hauteur_max=260):
+    """Calcule une grille (colonnes, lignes, largeur de case, hauteur de
+    case) qui remplit au mieux l'espace disponible avec `nombre_elements`
+    cases : peu d'elements = grandes cases, beaucoup d'elements = cases plus
+    petites mais toujours reparties pour remplir tout l'espace, sans jamais
+    avoir besoin de scroller.
+
+    Essaie tous les nombres de colonnes possibles et garde celui qui
+    approche le mieux (largeur_min, hauteur_min) SANS jamais depasser
+    l'espace reellement disponible : largeur_min/hauteur_min sont une
+    preference, pas une garantie - avec beaucoup d'elements dans un petit
+    espace, mieux vaut des cases un peu plus petites que des cases qui
+    debordent hors de l'ecran (et forcent a scroller)."""
+    if nombre_elements <= 0 or largeur_dispo <= 1 or hauteur_dispo <= 1:
+        return 1, 1, largeur_min, hauteur_min
+
+    meilleur = None
+    for colonnes in range(1, nombre_elements + 1):
+        lignes = -(-nombre_elements // colonnes)  # arrondi superieur
+        largeur_case = (largeur_dispo - espace * (colonnes + 1)) / colonnes
+        hauteur_case = (hauteur_dispo - espace * (lignes + 1)) / lignes
+        if largeur_case <= 20 or hauteur_case <= 20:
+            continue  # case inutilisable, meme en dernier recours
+
+        manque = max(0, largeur_min - largeur_case) + max(0, hauteur_min - hauteur_case)
+        taille_effective = min(largeur_case, largeur_max) + min(hauteur_case, hauteur_max)
+        score = taille_effective - manque * 10  # penalise fort le fait de ne pas atteindre le minimum souhaite
+
+        if meilleur is None or score > meilleur[0]:
+            meilleur = (score, colonnes, lignes, largeur_case, hauteur_case)
+
+    if meilleur is None:
+        # espace vraiment trop petit pour la moindre grille : une seule
+        # colonne, quitte a devoir scroller (cas extreme, pas le cas normal)
+        return 1, nombre_elements, max(largeur_dispo - 2 * espace, largeur_min), hauteur_min
+
+    _, colonnes, lignes, largeur_case, hauteur_case = meilleur
+    largeur_case = min(largeur_case, largeur_max)
+    hauteur_case = min(hauteur_case, hauteur_max)
+    return colonnes, lignes, largeur_case, hauteur_case
+
+
+def police_echelle(police_base, hauteur_case, taille_min=None, taille_max=None):
+    """Renvoie une variante de `police_base` dont la taille suit grosso modo
+    la hauteur de case disponible (case plus grande = texte plus grand),
+    pour que les tuiles qui grandissent (peu d'elements a l'ecran) affichent
+    aussi un texte plus lisible plutot qu'un texte fixe perdu au milieu."""
+    taille_base = police_base[1]
+    taille_min = taille_min if taille_min is not None else taille_base
+    taille_max = taille_max if taille_max is not None else taille_base * 2
+    taille = max(taille_min, min(round(hauteur_case * 0.22), taille_max))
+    return (police_base[0], taille) + tuple(police_base[2:])
+
+
+def police_ajustee_a_largeur(texte, police, largeur_max, taille_min=14):
+    """Reduit la taille de `police` (sans descendre sous `taille_min`)
+    jusqu'a ce que `texte` tienne sur une seule ligne dans `largeur_max`
+    pixels. Sert pour les noms de categorie composes d'un seul mot (ex:
+    "Viennoiserie", "Patisserie") : sans espace, Tkinter ne peut les couper
+    qu'au milieu du mot faute de place, ce qui est illisible - mieux vaut
+    rapetisser le texte que le voir coupe n'importe ou."""
+    taille = police[1]
+    while taille > taille_min:
+        police_test = (police[0], taille) + tuple(police[2:])
+        if largeur_texte(texte, police_test) <= largeur_max:
+            return police_test
+        taille -= 1
+    return (police[0], taille_min) + tuple(police[2:])
+
+
+def polices_ajustees_a_hauteur(polices, hauteur_max, taille_min=9):
+    """Reduit la taille d'une liste de polices (une par ligne de texte,
+    empilees dans une meme tuile) si leur hauteur cumulee depasse
+    `hauteur_max`, pour que le texte ne deborde jamais hors du bas de sa
+    tuile - meme logique que police_ajustee_a_largeur, mais en hauteur et
+    pour plusieurs lignes qui se partagent le meme espace."""
+    def hauteur_totale(pols):
+        return sum(tkfont.Font(font=p).metrics("linespace") for p in pols)
+
+    polices = list(polices)
+    if hauteur_totale(polices) <= hauteur_max:
+        return polices
+
+    total = hauteur_totale(polices)
+    facteur = hauteur_max / total if total > 0 else 1
+    polices = [(p[0], max(taille_min, int(p[1] * facteur))) + tuple(p[2:]) for p in polices]
+
+    # Le facteur proportionnel est approximatif (tailles entieres, metriques
+    # de police non parfaitement lineaires) : on affine ensuite ligne par
+    # ligne au besoin, en reduisant toujours la plus grande en premier,
+    # jusqu'a rentrer dans hauteur_max ou atteindre taille_min partout.
+    while hauteur_totale(polices) > hauteur_max and any(p[1] > taille_min for p in polices):
+        i_max = max(range(len(polices)), key=lambda i: polices[i][1])
+        p = polices[i_max]
+        polices[i_max] = (p[0], p[1] - 1) + tuple(p[2:])
+
+    return polices
 
 
 class ScrollableFrame(tk.Frame):

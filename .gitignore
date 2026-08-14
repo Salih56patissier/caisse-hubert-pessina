@@ -6,6 +6,7 @@ caisse.db
 build/
 dist/
 *.spec
+*.exe
 
 # Genere a chaque lancement, pas utile a versionner
 diagnostic_ecran.log

@@ -21,26 +21,22 @@ from admin import FenetreAdmin
 from historique import FenetreHistorique, FenetreRecap
 from pave_numerique import PaveNumerique
 from styles import (
-    BLANC, BRUN_200, BRUN_500, BRUN_700, BRUN_800, CREME, OR, ROUGE, VERT,
+    BLANC, BRUN_200, BRUN_500, BRUN_700, BRUN_800, CREME, OR, ROUGE, VERT, COULEURS_CATEGORIES,
     HEADER_DEGRADE_GAUCHE, HEADER_DEGRADE_DROITE, POLICE_BADGE, POLICE_CATEGORIE, POLICE_CATEGORIE_CAISSE,
     POLICE_ENCAISSER, POLICE_PRODUIT_HINT, POLICE_PRODUIT_NOM, POLICE_PRODUIT_PRIX,
     POLICE_SOUS_TITRE, POLICE_TICKET_DETAIL, POLICE_TICKET_NOM, POLICE_TICKET_TITRE,
     POLICE_TITRE, POLICE_TOTAL, POLICE_BOUTON_ROND,
-    BoutonArrondi, ScrollableFrame, largeur_texte, rectangle_arrondi,
+    BoutonArrondi, ScrollableFrame, rectangle_arrondi,
     definir_dpi_awareness, diagnostiquer_ecran, zone_travail_windows,
+    calculer_grille_adaptative, police_echelle, police_ajustee_a_largeur,
+    polices_ajustees_a_hauteur, MARGE_BADGE_QUANTITE,
 )
 
 # A incrementer a chaque changement visible de l'ecran de caisse : s'affiche
 # dans le titre de la fenetre pour verifier sans ambiguite, en cas de doute,
 # que la version testee sur un poste est bien la derniere (et pas un ancien
 # .exe reste sur le PC).
-VERSION_APP = "2026-08-13.7"
-
-NB_COLONNES_PRODUITS = 3
-HAUTEUR_PASTILLE_CATEGORIE = 84
-HAUTEUR_TUILE_PRODUIT = 118  # un peu plus que la largeur du nom+prix pour laisser
-                              # de la marge quand un nom de produit long doit
-                              # passer sur 2 lignes (voir _dessiner dans styles.py)
+VERSION_APP = "2026-08-14.1"
 
 # Taille de fenetre adaptee a la zone de travail reelle du poste (hors barre
 # des taches), plafonnee a une taille raisonnable : jamais plus grande que
@@ -55,6 +51,8 @@ MARGE_SECURITE_ECRAN = 20  # px retires a la zone de travail detectee, par prude
 
 
 class CaisseApp(tk.Tk):
+    LARGEUR_ZONE_TICKET = 300  # panneau de droite (ticket) ; le reste va aux categories/produits
+
     def __init__(self):
         super().__init__()
         self.title("Hubert & Pessina - Caisse [{}]".format(VERSION_APP))
@@ -120,7 +118,10 @@ class CaisseApp(tk.Tk):
         corps.pack(side="top", fill="both", expand=True)
 
         # --- zone de droite : ticket (empaquetee AVANT la zone extensible) ---
-        zone_ticket = tk.Frame(corps, bg=BLANC, width=400)
+        # Reduite au minimum utile : le cote categories/produits a bien plus
+        # besoin de place (grandes tuiles a reperer vite) que celui-ci, qui
+        # n'affiche que la liste + les totaux.
+        zone_ticket = tk.Frame(corps, bg=BLANC, width=self.LARGEUR_ZONE_TICKET)
         zone_ticket.pack(side="right", fill="y")
         zone_ticket.pack_propagate(False)
         self._construire_ticket(zone_ticket)
@@ -133,8 +134,14 @@ class CaisseApp(tk.Tk):
         self.zone_produits_scroll = ScrollableFrame(zone_gauche, bg=CREME)
         self.zone_produits_scroll.pack(side="top", fill="both", expand=True, padx=14, pady=14)
         self.frame_produits = self.zone_produits_scroll.interior
-        self.frame_produits.bind("<Configure>", self._sur_redimensionnement_frame_produits)
-        self._pastilles_categories_ecran = []  # liste de (widget, largeur) pour le retour a la ligne
+        # Sur le canvas (taille reellement visible), pas sur frame_produits
+        # (qui grandit avec son contenu) : c'est cette taille visible qu'il
+        # faut remplir au mieux avec les tuiles, sans jamais avoir a scroller.
+        # add="+" : ScrollableFrame a deja son propre bind sur ce meme
+        # evenement (pour synchroniser sa largeur avec le canvas) - sans
+        # add="+", notre bind le remplacerait au lieu de s'y ajouter, et la
+        # largeur interne resterait bloquee a sa valeur initiale (1px).
+        self.zone_produits_scroll.canvas.bind("<Configure>", self._sur_redimensionnement_zone_produits, add="+")
 
     def _construire_entete(self):
         self.canvas_entete = tk.Canvas(self, height=72, highlightthickness=0, bg=CREME)
@@ -245,11 +252,17 @@ class CaisseApp(tk.Tk):
         cadre_mode = tk.Frame(zone_haut, bg=BLANC)
         cadre_mode.pack(side="top", fill="x", padx=14, pady=(0, 8))
         self.boutons_mode_vente = {}
+        # Largeur reelle approximative de chaque bouton une fois le panneau
+        # ticket (300px) reduit et les 2 boutons cote a cote : sans ajuster
+        # la police au texte le plus long ("A emporter"), il pouvait
+        # deborder/etre tronque et devenir illisible sur le fond fonce.
+        largeur_bouton_mode = (self.LARGEUR_ZONE_TICKET - 28 - 16) // 2
         for mode, texte in (("sur_place", "Sur place"), ("a_emporter", "A emporter")):
+            police = police_ajustee_a_largeur(texte, POLICE_BOUTON_ROND, largeur_bouton_mode - 16, taille_min=10)
             bouton = BoutonArrondi(
-                cadre_mode, lignes=[(texte, POLICE_BOUTON_ROND, BRUN_700)],
+                cadre_mode, lignes=[(texte, police, BRUN_700)],
                 commande=lambda m=mode: self._definir_mode_vente(m),
-                largeur=170, hauteur=44, rayon=10,
+                largeur=largeur_bouton_mode, hauteur=44, rayon=10,
                 couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=BLANC,
             )
             bouton.pack(side="left", fill="x", expand=True, padx=4)
@@ -263,7 +276,7 @@ class CaisseApp(tk.Tk):
             zone_haut, lignes=[("Dernier ticket", POLICE_BOUTON_ROND, BRUN_700)],
             commande=self._imprimer_dernier_ticket, largeur=372, hauteur=32, rayon=8,
             couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=BLANC,
-        ).pack(side="top", padx=14)
+        ).pack(side="top", padx=14, fill="x")
 
         self.zone_lignes_scroll = ScrollableFrame(zone_ticket, bg=BLANC)
         self.zone_lignes_scroll.pack(side="top", fill="both", expand=True, padx=10)
@@ -273,8 +286,8 @@ class CaisseApp(tk.Tk):
         bas_ticket.pack(side="bottom", fill="x", padx=14, pady=(0, 16))
         bas_ticket.pack_propagate(False)
 
-        separateur = tk.Frame(bas_ticket, bg=BRUN_700, height=2)
-        separateur.pack(side="top", fill="x", pady=(6, 8))
+        separateur = tk.Frame(bas_ticket, bg=BRUN_700, height=1)
+        separateur.pack(side="top", fill="x", pady=(4, 6))
 
         self.label_ht = tk.Label(
             bas_ticket, text="Total HT : 0 DH", font=POLICE_TICKET_DETAIL,
@@ -292,7 +305,7 @@ class CaisseApp(tk.Tk):
         # un client qui prend plusieurs gateaux) : appliquee juste avant
         # l'encaissement, sur le total complet.
         cadre_remise = tk.Frame(bas_ticket, bg=BLANC)
-        cadre_remise.pack(side="top", fill="x", pady=(0, 4))
+        cadre_remise.pack(side="top", fill="x", pady=(0, 2))
         self.label_remise = tk.Label(
             cadre_remise, text="Remise : aucune", font=POLICE_TICKET_DETAIL,
             bg=BLANC, fg=BRUN_500, anchor="w",
@@ -300,20 +313,20 @@ class CaisseApp(tk.Tk):
         self.label_remise.pack(side="left")
         self.bouton_retirer_remise = BoutonArrondi(
             cadre_remise, lignes=[("X", POLICE_BOUTON_ROND, BLANC)],
-            commande=self._retirer_remise, largeur=28, hauteur=28, rayon=8,
+            commande=self._retirer_remise, largeur=24, hauteur=24, rayon=7,
             couleur_fond=ROUGE, couleur_bordure=ROUGE, bg=BLANC,
         )
         BoutonArrondi(
             cadre_remise, lignes=[("Remise %", POLICE_BOUTON_ROND, BLANC)],
-            commande=self._ouvrir_remise, largeur=100, hauteur=28, rayon=8,
+            commande=self._ouvrir_remise, largeur=90, hauteur=24, rayon=7,
             couleur_fond=OR, couleur_bordure=OR, bg=BLANC,
         ).pack(side="right")
 
         self.label_total = tk.Label(
-            bas_ticket, text="Total TTC : 0 DH", font=POLICE_TOTAL,
-            bg=BLANC, fg=BRUN_800, anchor="e",
+            bas_ticket, font=POLICE_TOTAL, bg=BLANC, fg=BRUN_800, anchor="e",
         )
         self.label_total.pack(side="top", fill="x", pady=(0, 10))
+        self._definir_texte_total_ttc("Total TTC : 0.00 DH")
 
         self.bouton_encaisser = BoutonArrondi(
             bas_ticket, lignes=[("ENCAISSER", POLICE_ENCAISSER, BLANC)],
@@ -328,11 +341,23 @@ class CaisseApp(tk.Tk):
         self._rafraichir_ticket()
 
     def _rafraichir_mode_vente(self):
+        largeur_bouton_mode = (self.LARGEUR_ZONE_TICKET - 28 - 16) // 2
         for mode, bouton in self.boutons_mode_vente.items():
             actif = (mode == self.mode_vente)
             texte = "Sur place" if mode == "sur_place" else "A emporter"
-            bouton.definir_lignes([(texte, POLICE_BOUTON_ROND, BLANC if actif else BRUN_700)])
+            police = police_ajustee_a_largeur(texte, POLICE_BOUTON_ROND, largeur_bouton_mode - 16, taille_min=10)
+            bouton.definir_lignes([(texte, police, BLANC if actif else BRUN_700)])
             bouton.definir_fond(BRUN_700 if actif else BLANC, BRUN_700 if actif else BRUN_200)
+
+    def _definir_texte_total_ttc(self, texte):
+        """Le montant grandit avec le panier (ex: '1234.00 DH'), et le
+        panneau ticket est etroit (300px) : sans reduire la police au
+        besoin, le debut du texte ('Total') sortait du cadre (anchor='e'
+        le pousse hors-champ a gauche) et n'affichait que la fin, du genre
+        'al TTC : 0.00 DH'."""
+        largeur_dispo = self.LARGEUR_ZONE_TICKET - 28
+        police = police_ajustee_a_largeur(texte, POLICE_TOTAL, largeur_dispo, taille_min=16)
+        self.label_total.configure(text=texte, font=police)
 
     # ------------------------------------------------------------------
     # Navigation : ecran categories <-> ecran produits <-> ecran parfums
@@ -340,7 +365,6 @@ class CaisseApp(tk.Tk):
     def _rafraichir_ecran(self):
         for widget in self.frame_produits.winfo_children():
             widget.destroy()
-        self._pastilles_categories_ecran = []
 
         if self.categorie_active_id is None:
             self._construire_selection_categories()
@@ -349,49 +373,55 @@ class CaisseApp(tk.Tk):
         else:
             self._construire_grille_produits()
 
-    def _construire_selection_categories(self):
-        """Grand ecran d'accueil : uniquement les pastilles de categories,
-        compactes mais bien lisibles/cliquables, sur autant de lignes que
-        necessaire (comme du texte qui retourne a la ligne) pour ne jamais
-        deborder de l'ecran."""
-        categories = self.conn.execute("SELECT * FROM categories ORDER BY ordre, id").fetchall()
-        for cat in categories:
-            largeur = largeur_texte(cat["nom"], POLICE_CATEGORIE_CAISSE) + 72
-            bouton = BoutonArrondi(
-                self.frame_produits,
-                lignes=[(cat["nom"], POLICE_CATEGORIE_CAISSE, BRUN_700)],
-                commande=lambda cid=cat["id"]: self._selectionner_categorie(cid),
-                largeur=largeur, hauteur=HAUTEUR_PASTILLE_CATEGORIE, rayon=HAUTEUR_PASTILLE_CATEGORIE // 2,
-                couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=CREME,
-            )
-            self._pastilles_categories_ecran.append((bouton, largeur))
-        self._positionner_pastilles_categories(self.frame_produits.winfo_width())
+    def _zone_produits_taille_visible(self):
+        """Taille (largeur, hauteur) reellement visible pour les tuiles,
+        c-a-d celle du canvas defilant, pas celle de son contenu (qui
+        grandirait avec le nombre de tuiles)."""
+        canvas = self.zone_produits_scroll.canvas
+        return canvas.winfo_width(), canvas.winfo_height()
 
-    def _positionner_pastilles_categories(self, largeur_dispo):
-        if largeur_dispo <= 1 or not self._pastilles_categories_ecran:
+    def _construire_selection_categories(self):
+        """Grand ecran d'accueil : les pastilles de categories occupent
+        TOUJOURS tout l'espace visible (grille adaptative) - peu de
+        categories = grandes pastilles, beaucoup = plus petites mais
+        toujours reparties pour remplir l'ecran, jamais besoin de scroller."""
+        categories = self.conn.execute("SELECT * FROM categories ORDER BY ordre, id").fetchall()
+        if not categories:
             return
-        espace = 14
-        x = 0
-        y = 0
-        for widget, largeur in self._pastilles_categories_ecran:
-            if x > 0 and x + largeur > largeur_dispo:
-                x = 0
-                y += HAUTEUR_PASTILLE_CATEGORIE + espace
-            widget.place(x=x, y=y, width=largeur, height=HAUTEUR_PASTILLE_CATEGORIE)
-            x += largeur + espace
+
+        largeur_dispo, hauteur_dispo = self._zone_produits_taille_visible()
+        espace = 16
+        colonnes, lignes, largeur_case, hauteur_case = calculer_grille_adaptative(
+            len(categories), largeur_dispo, hauteur_dispo, espace=espace,
+            largeur_min=150, largeur_max=560, hauteur_min=90, hauteur_max=260,
+        )
+        police_max = police_echelle(POLICE_CATEGORIE_CAISSE, hauteur_case, taille_min=18, taille_max=44)
+
+        for index, cat in enumerate(categories):
+            ligne, colonne = divmod(index, colonnes)
+            x = espace + colonne * (largeur_case + espace)
+            y = espace + ligne * (hauteur_case + espace)
+            couleur = COULEURS_CATEGORIES[index % len(COULEURS_CATEGORIES)]
+            # Taille ajustee par categorie : un nom compose d'un seul mot
+            # long (ex: "Viennoiserie") doit rapetisser pour tenir sur une
+            # ligne plutot que de se couper au milieu, faute d'espace ou le
+            # scinder proprement.
+            police = police_ajustee_a_largeur(cat["nom"], police_max, largeur_case - 24, taille_min=14)
+            bouton = BoutonArrondi(
+                self.frame_produits, lignes=[(cat["nom"], police, BLANC)],
+                commande=lambda cid=cat["id"]: self._selectionner_categorie(cid),
+                largeur=largeur_case, hauteur=hauteur_case, rayon=20,
+                couleur_fond=couleur, couleur_bordure=couleur, bg=CREME,
+            )
+            bouton.place(x=x, y=y, width=largeur_case, height=hauteur_case)
 
         # place() ne fait pas grandir automatiquement son conteneur (contrairement
-        # a grid) : sans ceci, le cadre reste minuscule et les pastilles, bien que
+        # a grid) : sans ceci le cadre reste minuscule et les pastilles, bien que
         # "placees", restent invisibles car en dehors de la zone visible/defilante.
-        # NB: on configure toujours (pas de garde "si different") car cget("height")
-        # ne reflete que la derniere valeur explicitement configuree, pas la taille
-        # reelle actuelle quand l'ecran produits (gere par grid) est passe par la
-        # entre-temps : une garde basee dessus sauterait a tort la mise a jour.
-        self.frame_produits.configure(height=y + HAUTEUR_PASTILLE_CATEGORIE)
+        self.frame_produits.configure(height=max(hauteur_dispo, lignes * (hauteur_case + espace) + espace))
 
-    def _sur_redimensionnement_frame_produits(self, event):
-        if self.categorie_active_id is None:
-            self._positionner_pastilles_categories(event.width)
+    def _sur_redimensionnement_zone_produits(self, event):
+        self._rafraichir_ecran()
 
     def _selectionner_categorie(self, categorie_id):
         self.categorie_active_id = categorie_id
@@ -403,19 +433,57 @@ class CaisseApp(tk.Tk):
         self.produit_sous_menu_actif = None
         self._rafraichir_ecran()
 
-    def _creer_tuile_produit(self, parent, nom, prix, hint=None):
-        """Cree une tuile produit/parfum avec son badge de quantite."""
+    def _creer_tuile_produit(self, nom, prix, largeur_case, hauteur_case, hint=None):
+        """Cree les lignes de texte d'une tuile produit/parfum, avec une
+        police mise a l'echelle de la taille reelle de la tuile (grande
+        tuile = texte plus grand), ajustee en largeur pour que le nom ne se
+        coupe jamais au milieu faute de place, ET en hauteur pour que les 2
+        lignes tiennent toujours dans la tuile (pas de badge = pas de hint,
+        badge = espace du badge deduit)."""
+        police_nom = police_echelle(POLICE_PRODUIT_NOM, hauteur_case, taille_min=11, taille_max=22)
+        police_nom = police_ajustee_a_largeur(nom, police_nom, largeur_case - 20, taille_min=10)
         if hint:
-            lignes = [
-                (nom, POLICE_PRODUIT_NOM, BRUN_800),
-                (hint, POLICE_PRODUIT_HINT, OR),
-            ]
+            police_detail = police_echelle(POLICE_PRODUIT_HINT, hauteur_case, taille_min=9, taille_max=16)
+            texte_detail = hint
         else:
-            lignes = [
-                (nom, POLICE_PRODUIT_NOM, BRUN_800),
-                ("{:g} DH".format(prix), POLICE_PRODUIT_PRIX, OR),
-            ]
-        return lignes
+            police_detail = police_echelle(POLICE_PRODUIT_PRIX, hauteur_case, taille_min=11, taille_max=20)
+            texte_detail = "{:g} DH".format(prix)
+
+        # une tuile avec badge de quantite (donc sans hint : voir plus haut)
+        # perd MARGE_BADGE_QUANTITE px en haut, reserves pour le badge
+        marge_haut = MARGE_BADGE_QUANTITE if hint is None else 0
+        police_nom, police_detail = polices_ajustees_a_hauteur(
+            [police_nom, police_detail], hauteur_case - marge_haut, taille_min=9,
+        )
+
+        return [(nom, police_nom, BLANC), (texte_detail, police_detail, BLANC)]
+
+    HAUTEUR_ENTETE_ECRAN_PRODUITS = 60
+
+    def _construire_grille_tuiles(self, nombre, constructeur_tuile, hauteur_reservee_haut=0, hauteur_reservee_bas=0):
+        """Calcule la grille adaptative pour `nombre` tuiles dans l'espace
+        visible restant, puis appelle `constructeur_tuile(index, largeur_case,
+        hauteur_case)` pour chacune (elle doit renvoyer un BoutonArrondi deja
+        cree, pas encore place) et la positionne. Remplit tout l'ecran
+        disponible sans jamais avoir besoin de scroller ; peu de tuiles =
+        tuiles plus grandes, beaucoup de tuiles = plus petites mais toujours
+        reparties pour occuper toute la place."""
+        largeur_dispo, hauteur_totale = self._zone_produits_taille_visible()
+        hauteur_dispo = hauteur_totale - hauteur_reservee_haut - hauteur_reservee_bas
+        espace = 12
+        colonnes, lignes, largeur_case, hauteur_case = calculer_grille_adaptative(
+            max(nombre, 1), largeur_dispo, hauteur_dispo, espace=espace,
+            largeur_min=170, largeur_max=380, hauteur_min=90, hauteur_max=240,
+        )
+        for index in range(nombre):
+            ligne, colonne = divmod(index, colonnes)
+            x = espace + colonne * (largeur_case + espace)
+            y = hauteur_reservee_haut + espace + ligne * (hauteur_case + espace)
+            tuile = constructeur_tuile(index, largeur_case, hauteur_case)
+            tuile.place(x=x, y=y, width=largeur_case, height=hauteur_case)
+        hauteur_contenu = hauteur_reservee_haut + espace + lignes * (hauteur_case + espace) + hauteur_reservee_bas
+        self.frame_produits.configure(height=max(hauteur_totale, hauteur_contenu))
+        return max(hauteur_totale, hauteur_contenu)
 
     def _construire_grille_produits(self):
         categorie = self.conn.execute(
@@ -427,83 +495,82 @@ class CaisseApp(tk.Tk):
 
         BoutonArrondi(
             self.frame_produits, lignes=[("< Categories", POLICE_CATEGORIE, BLANC)],
-            commande=self._retour_categories, largeur=210, hauteur=52, rayon=12,
+            commande=self._retour_categories, largeur=200, hauteur=48, rayon=12,
             couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=CREME,
-        ).grid(row=0, column=0, sticky="w", pady=(0, 14))
+        ).place(x=0, y=0, width=200, height=48)
         tk.Label(
             self.frame_produits, text=categorie["nom"], font=POLICE_SOUS_TITRE,
             bg=CREME, fg=BRUN_700,
-        ).grid(row=0, column=1, columnspan=NB_COLONNES_PRODUITS - 1, sticky="w", pady=(0, 14))
+        ).place(x=214, y=8)
 
         produits = self.conn.execute(
             "SELECT * FROM produits WHERE categorie_id = ? ORDER BY id",
             (self.categorie_active_id,),
         ).fetchall()
 
-        for index, produit in enumerate(produits):
-            ligne, colonne = divmod(index, NB_COLONNES_PRODUITS)
-            ligne += 1  # decale d'une ligne pour laisser la place au bouton "< Categories"
-
+        def construire_tuile(index, largeur_case, hauteur_case):
+            produit = produits[index]
             if produit["a_des_sous_produits"]:
-                lignes = self._creer_tuile_produit(self.frame_produits, produit["nom"], None,
+                lignes = self._creer_tuile_produit(produit["nom"], None, largeur_case, hauteur_case,
                                                     hint="Voir les parfums >")
                 commande = lambda p=produit: self._ouvrir_sous_menu(p)
                 commande_qte = None  # pas de quantite directe sur un produit sans prix propre
             else:
-                lignes = self._creer_tuile_produit(self.frame_produits, produit["nom"], produit["prix"])
+                lignes = self._creer_tuile_produit(produit["nom"], produit["prix"], largeur_case, hauteur_case)
                 nom_p, prix_p, tva_p = produit["nom"], produit["prix"], produit["tva_fixe"]
                 commande = lambda nom=nom_p, prix=prix_p, tva=tva_p: self._ajouter_au_ticket(nom, prix, 1, tva)
                 commande_qte = lambda nom=nom_p, prix=prix_p, tva=tva_p: self._ouvrir_pave_quantite(nom, prix, tva)
-
-            tuile = BoutonArrondi(
+            couleur = COULEURS_CATEGORIES[index % len(COULEURS_CATEGORIES)]
+            return BoutonArrondi(
                 self.frame_produits, lignes=lignes, commande=commande,
-                largeur=225, hauteur=HAUTEUR_TUILE_PRODUIT, rayon=14,
-                couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=CREME,
+                largeur=largeur_case, hauteur=hauteur_case, rayon=14,
+                couleur_fond=couleur, couleur_bordure=couleur, bg=CREME,
                 commande_quantite=commande_qte,
             )
-            tuile.grid(row=ligne, column=colonne, sticky="nsew", padx=6, pady=6)
 
-        for c in range(NB_COLONNES_PRODUITS):
-            self.frame_produits.grid_columnconfigure(c, weight=1)
+        self._construire_grille_tuiles(
+            len(produits), construire_tuile, hauteur_reservee_haut=self.HAUTEUR_ENTETE_ECRAN_PRODUITS,
+        )
 
     def _construire_vue_sous_menu(self, produit):
         tk.Label(
             self.frame_produits, text=produit["nom"], font=POLICE_SOUS_TITRE,
             bg=CREME, fg=BRUN_700,
-        ).grid(row=0, column=0, columnspan=NB_COLONNES_PRODUITS, sticky="w", pady=(0, 10))
+        ).place(x=0, y=8)
 
         sous_produits = self.conn.execute(
             "SELECT * FROM sous_produits WHERE produit_id = ? ORDER BY id",
             (produit["id"],),
         ).fetchall()
 
-        for index, sp in enumerate(sous_produits):
-            ligne, colonne = divmod(index, NB_COLONNES_PRODUITS)
+        def construire_tuile(index, largeur_case, hauteur_case):
+            sp = sous_produits[index]
             nom_complet = "{} {}".format(produit["nom"], sp["nom"])
-            lignes = self._creer_tuile_produit(self.frame_produits, sp["nom"], sp["prix"])
+            lignes = self._creer_tuile_produit(sp["nom"], sp["prix"], largeur_case, hauteur_case)
             # un parfum/sous-produit suit le meme regime de TVA que son
             # produit parent (pas de reglage individuel par parfum)
             prix_sp, tva_sp = sp["prix"], produit["tva_fixe"]
             commande = lambda nom=nom_complet, prix=prix_sp, tva=tva_sp: self._ajouter_au_ticket(nom, prix, 1, tva)
             commande_qte = lambda nom=nom_complet, prix=prix_sp, tva=tva_sp: self._ouvrir_pave_quantite(nom, prix, tva)
-            tuile = BoutonArrondi(
+            couleur = COULEURS_CATEGORIES[index % len(COULEURS_CATEGORIES)]
+            return BoutonArrondi(
                 self.frame_produits, lignes=lignes, commande=commande,
-                largeur=225, hauteur=HAUTEUR_TUILE_PRODUIT, rayon=14,
-                couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=CREME,
+                largeur=largeur_case, hauteur=hauteur_case, rayon=14,
+                couleur_fond=couleur, couleur_bordure=couleur, bg=CREME,
                 commande_quantite=commande_qte,
             )
-            tuile.grid(row=ligne + 1, column=colonne, sticky="nsew", padx=6, pady=6)
 
-        for c in range(NB_COLONNES_PRODUITS):
-            self.frame_produits.grid_columnconfigure(c, weight=1)
+        HAUTEUR_BAS = 68
+        hauteur_contenu = self._construire_grille_tuiles(
+            len(sous_produits), construire_tuile,
+            hauteur_reservee_haut=self.HAUTEUR_ENTETE_ECRAN_PRODUITS, hauteur_reservee_bas=HAUTEUR_BAS,
+        )
 
-        nb_lignes_parfums = -(-len(sous_produits) // NB_COLONNES_PRODUITS)  # arrondi superieur
-        bouton_retour = BoutonArrondi(
+        BoutonArrondi(
             self.frame_produits, lignes=[("< Retour", POLICE_CATEGORIE, BLANC)],
             commande=self._fermer_sous_menu, largeur=200, hauteur=52, rayon=12,
             couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=CREME,
-        )
-        bouton_retour.grid(row=nb_lignes_parfums + 1, column=0, sticky="w", pady=(10, 0))
+        ).place(x=0, y=hauteur_contenu - HAUTEUR_BAS + 8)
 
     def _ouvrir_sous_menu(self, produit):
         self.produit_sous_menu_actif = produit
@@ -595,7 +662,7 @@ class CaisseApp(tk.Tk):
         total_ht, total_tva, total_ttc, _ = self._totaux_ticket()
         self.label_ht.configure(text="Total HT : {:.2f} DH".format(total_ht))
         self.label_tva.configure(text="TVA : {:.2f} DH".format(total_tva))
-        self.label_total.configure(text="Total TTC : {:.2f} DH".format(total_ttc))
+        self._definir_texte_total_ttc("Total TTC : {:.2f} DH".format(total_ttc))
 
         if self.remise_pourcentage > 0:
             self.label_remise.configure(text="Remise : -{:g}%".format(self.remise_pourcentage))
@@ -733,6 +800,13 @@ class CaisseApp(tk.Tk):
         self.ticket = []
         self.remise_pourcentage = 0
         self._rafraichir_ticket()
+
+        # Retour automatique a l'ecran des categories : le client suivant ne
+        # doit pas se retrouver sur le produit/categorie ou s'est arretee la
+        # vente precedente, sinon il faut cliquer "< Categories" a chaque fois.
+        self.categorie_active_id = None
+        self.produit_sous_menu_actif = None
+        self._rafraichir_ecran()
 
     def _charger_dernier_ticket_depuis_db(self):
         """Reconstruit `self._dernier_ticket` a partir de la derniere vente
