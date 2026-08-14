@@ -26,6 +26,7 @@ CREME = "#faf6f1"
 OR = "#c17f2b"
 OR_CLAIR = "#e6a94f"
 VERT = "#3f9142"
+ROSE = "#e75480"
 ROUGE = "#d1554a"
 BLANC = "#ffffff"
 

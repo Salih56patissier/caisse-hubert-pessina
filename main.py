@@ -21,7 +21,7 @@ from admin import FenetreAdmin
 from historique import FenetreHistorique, FenetreRecap
 from pave_numerique import PaveNumerique
 from styles import (
-    BLANC, BRUN_200, BRUN_500, BRUN_700, BRUN_800, CREME, OR, ROUGE, VERT, COULEURS_CATEGORIES,
+    BLANC, BRUN_200, BRUN_500, BRUN_700, BRUN_800, CREME, OR, ROSE, ROUGE, VERT, COULEURS_CATEGORIES,
     HEADER_DEGRADE_GAUCHE, HEADER_DEGRADE_DROITE, POLICE_BADGE, POLICE_CATEGORIE, POLICE_CATEGORIE_CAISSE,
     POLICE_ENCAISSER, POLICE_PRODUIT_HINT, POLICE_PRODUIT_NOM, POLICE_PRODUIT_PRIX,
     POLICE_SOUS_TITRE, POLICE_TICKET_DETAIL, POLICE_TICKET_NOM, POLICE_TICKET_TITRE,
@@ -890,7 +890,7 @@ class CaisseApp(tk.Tk):
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
         popup.attributes("-topmost", True)
-        popup.configure(bg=VERT)
+        popup.configure(bg=ROSE)
 
         largeur, hauteur = 560, 480
         x = self.winfo_rootx() + (self.winfo_width() - largeur) // 2
@@ -898,19 +898,19 @@ class CaisseApp(tk.Tk):
         popup.geometry("{}x{}+{}+{}".format(largeur, hauteur, x, y))
 
         tk.Label(popup, text="Vente encaissee", font=("Segoe UI", 30, "bold"),
-                 bg=VERT, fg=BLANC).pack(pady=(40, 10))
+                 bg=ROSE, fg=BLANC).pack(pady=(40, 10))
         tk.Label(popup, text="{:g} DH".format(total), font=("Georgia", 64, "bold"),
-                 bg=VERT, fg=BLANC).pack(pady=(0, 30))
+                 bg=ROSE, fg=BLANC).pack(pady=(0, 30))
 
         BoutonArrondi(
-            popup, lignes=[("Imprimer le ticket", ("Segoe UI", 16, "bold"), VERT)],
+            popup, lignes=[("Imprimer le ticket", ("Segoe UI", 16, "bold"), ROSE)],
             commande=self._imprimer_dernier_ticket, largeur=320, hauteur=54, rayon=14,
-            couleur_fond=BLANC, couleur_bordure=BLANC, bg=VERT,
+            couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
         ).pack(pady=(0, 14))
         BoutonArrondi(
-            popup, lignes=[("OK", ("Segoe UI", 26, "bold"), VERT)],
+            popup, lignes=[("OK", ("Segoe UI", 26, "bold"), ROSE)],
             commande=popup.destroy, largeur=220, hauteur=70, rayon=16,
-            couleur_fond=BLANC, couleur_bordure=BLANC, bg=VERT,
+            couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
         ).pack()
 
         popup.grab_set()  # bloque le reste de l'ecran tant que OK n'est pas presse
