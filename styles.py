@@ -397,8 +397,14 @@ class ScrollableFrame(tk.Frame):
         self.canvas_window = self.canvas.create_window((0, 0), window=self.interior, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
-        self.canvas.pack(side="left", fill="both", expand=True)
+        # La scrollbar DOIT etre empaquetee avant le canvas : sinon le canvas
+        # (fill="both", expand=True) reclame toute la cavite disponible en
+        # premier et ne laisse plus aucune place a la scrollbar, qui se
+        # retrouve avec une taille de 1x1 px, invisible et inutilisable -
+        # bug present depuis le debut, jamais remarque tant que le contenu
+        # tenait sans avoir besoin de defiler.
         self.scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
 
         self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.canvas.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>", self._on_mousewheel))
