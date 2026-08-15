@@ -11,6 +11,12 @@ import ctypes
 import tkinter as tk
 from tkinter import font as tkfont
 
+try:
+    from PIL import Image, ImageTk
+except ImportError:  # Pillow absent : les tuiles fonctionnent sans icone
+    Image = None
+    ImageTk = None
+
 # ---------------------------------------------------------------------------
 # Palette
 # ---------------------------------------------------------------------------
@@ -183,11 +189,15 @@ class BoutonArrondi(tk.Canvas):
     Si `commande_quantite` est fourni, un badge distinct ("123") apparait en
     bas a droite (sur la meme bande que `pied`) : cliquer dessus appelle
     `commande_quantite` au lieu de `commande` (utilise pour ouvrir le pave
-    numerique de quantite sans declencher l'ajout normal x1)."""
+    numerique de quantite sans declencher l'ajout normal x1).
+
+    `image_chemin` (optionnel) affiche une icone (PNG, idealement avec fond
+    transparent) au-dessus des lignes de texte, redimensionnee a chaque
+    redessin pour suivre la taille reelle de la tuile (grille adaptative)."""
 
     def __init__(self, parent, lignes, commande=None, largeur=160, hauteur=76,
                  rayon=14, couleur_fond=BLANC, couleur_bordure=BRUN_200,
-                 bg=CREME, commande_quantite=None, pied=None, **kwargs):
+                 bg=CREME, commande_quantite=None, pied=None, image_chemin=None, **kwargs):
         super().__init__(parent, width=largeur, height=hauteur, bg=bg,
                           highlightthickness=0, **kwargs)
         self.commande = commande
@@ -197,6 +207,13 @@ class BoutonArrondi(tk.Canvas):
         self.lignes = lignes
         self.pied = pied
         self.rayon = rayon
+        self._image_source = None  # image PIL d'origine, chargee une seule fois
+        self._photo_image = None  # reference gardee pour eviter le garbage collection
+        if image_chemin and Image is not None:
+            try:
+                self._image_source = Image.open(image_chemin).convert("RGBA")
+            except Exception:
+                self._image_source = None
         self._largeur = largeur
         self._hauteur = hauteur
         self._zone_badge = None
@@ -235,17 +252,36 @@ class BoutonArrondi(tk.Canvas):
         # devait etre decale et retreci pour ne pas passer dessous. En bas,
         # le nom garde toute la tuile pour lui et peut s'afficher plus gros.
         hauteur_pied = HAUTEUR_PIED_TUILE if (self.pied is not None or self.commande_quantite) else 0
-
         zone_hauteur = h - hauteur_pied
+
+        # Si une icone est fournie (categories), elle occupe le haut de la
+        # zone et le texte (nom de la categorie) se recentre dans le reste
+        # en dessous, plutot que sur la hauteur complete.
+        hauteur_icone = zone_hauteur * 0.6 if self._image_source is not None else 0
+        zone_texte_haut = hauteur_icone
+        zone_texte_hauteur = zone_hauteur - hauteur_icone
+
         hauteurs_lignes = [tkfont.Font(font=police).metrics("linespace") for _, police, _ in self.lignes]
-        espace_extra = max(zone_hauteur - sum(hauteurs_lignes), 0)
+        espace_extra = max(zone_texte_hauteur - sum(hauteurs_lignes), 0)
         interligne = espace_extra / (len(self.lignes) + 1) if self.lignes else 0
 
-        y = interligne
+        y = zone_texte_haut + interligne
         for (texte, police, couleur), hauteur_ligne in zip(self.lignes, hauteurs_lignes):
             self.create_text(w / 2, y + hauteur_ligne / 2, text=texte, font=police, fill=couleur,
                               justify="center", width=w - 12)
             y += hauteur_ligne + interligne
+
+        if hauteur_icone > 10:
+            marge_icone = 10
+            largeur_max = max(w - marge_icone * 2, 1)
+            hauteur_max = max(hauteur_icone - marge_icone, 1)
+            ratio = min(largeur_max / self._image_source.width, hauteur_max / self._image_source.height)
+            if ratio > 0:
+                taille = (max(1, int(self._image_source.width * ratio)),
+                          max(1, int(self._image_source.height * ratio)))
+                image_redim = self._image_source.resize(taille, Image.LANCZOS)
+                self._photo_image = ImageTk.PhotoImage(image_redim)
+                self.create_image(w / 2, hauteur_icone / 2, image=self._photo_image)
 
         if hauteur_pied:
             y_pied = h - hauteur_pied / 2

@@ -36,7 +36,31 @@ from styles import (
 # dans le titre de la fenetre pour verifier sans ambiguite, en cas de doute,
 # que la version testee sur un poste est bien la derniere (et pas un ancien
 # .exe reste sur le PC).
-VERSION_APP = "2026-08-14.1"
+VERSION_APP = "2026-08-14.2"
+
+# Pictogrammes des pastilles de categories (dossier a cote de caisse.db,
+# donc a cote de l'exe une fois empaquete - meme logique que le logo du
+# ticket). Categorie sans correspondance -> pas d'icone, juste le texte.
+DOSSIER_ICONES_CATEGORIES = os.path.join(os.path.dirname(database.DB_PATH), "icones_categories")
+ICONES_CATEGORIES = {
+    "Pain": "pain.png",
+    "Viennoiserie": "viennoiserie.png",
+    "Sablé": "biscuits.png",
+    "Tarte": "tartes.png",
+    "Patisserie": "patisseries.png",
+    "Salé": "sandwichs.png",
+    "Evenement": "gateaux.png",
+    "Divers": "bonbons.png",
+    "Boissons": "boissons.png",
+}
+
+
+def _chemin_icone_categorie(nom_categorie):
+    nom_fichier = ICONES_CATEGORIES.get(nom_categorie)
+    if not nom_fichier:
+        return None
+    chemin = os.path.join(DOSSIER_ICONES_CATEGORIES, nom_fichier)
+    return chemin if os.path.isfile(chemin) else None
 
 # Taille de fenetre adaptee a la zone de travail reelle du poste (hors barre
 # des taches), plafonnee a une taille raisonnable : jamais plus grande que
@@ -395,23 +419,34 @@ class CaisseApp(tk.Tk):
             len(categories), largeur_dispo, hauteur_dispo, espace=espace,
             largeur_min=150, largeur_max=560, hauteur_min=90, hauteur_max=260,
         )
-        police_max = police_echelle(POLICE_CATEGORIE_CAISSE, hauteur_case, taille_min=18, taille_max=44)
+        # Si au moins une categorie a une icone, le texte doit se contenter
+        # de la bande du bas (l'icone prend le haut - voir BoutonArrondi._dessiner,
+        # meme fraction 0.6) : on part d'une reference plus basse pour ne
+        # jamais avoir a rapetisser en catastrophe apres coup.
+        a_des_icones = any(_chemin_icone_categorie(cat["nom"]) for cat in categories)
+        hauteur_texte_ref = hauteur_case * 0.4 if a_des_icones else hauteur_case
+        police_max = police_echelle(POLICE_CATEGORIE_CAISSE, hauteur_texte_ref, taille_min=14, taille_max=44)
 
         for index, cat in enumerate(categories):
             ligne, colonne = divmod(index, colonnes)
             x = espace + colonne * (largeur_case + espace)
             y = espace + ligne * (hauteur_case + espace)
             couleur = COULEURS_CATEGORIES[index % len(COULEURS_CATEGORIES)]
+            chemin_icone = _chemin_icone_categorie(cat["nom"])
             # Taille ajustee par categorie : un nom compose d'un seul mot
             # long (ex: "Viennoiserie") doit rapetisser pour tenir sur une
             # ligne plutot que de se couper au milieu, faute d'espace ou le
-            # scinder proprement.
-            police = police_ajustee_a_largeur(cat["nom"], police_max, largeur_case - 24, taille_min=14)
+            # scinder proprement - et en hauteur si une icone reduit la
+            # place disponible pour le texte.
+            police = police_ajustee_a_largeur(cat["nom"], police_max, largeur_case - 24, taille_min=12)
+            if chemin_icone:
+                police, = polices_ajustees_a_hauteur([police], hauteur_case * 0.4, taille_min=12)
             bouton = BoutonArrondi(
                 self.frame_produits, lignes=[(cat["nom"], police, BLANC)],
                 commande=lambda cid=cat["id"]: self._selectionner_categorie(cid),
                 largeur=largeur_case, hauteur=hauteur_case, rayon=20,
                 couleur_fond=couleur, couleur_bordure=couleur, bg=CREME,
+                image_chemin=chemin_icone,
             )
             bouton.place(x=x, y=y, width=largeur_case, height=hauteur_case)
 
