@@ -49,10 +49,11 @@ COULEURS_CATEGORIES = [
     "#b8860b", # moutarde
 ]
 
-# Place reservee en haut d'une tuile quand elle a un badge de quantite
-# ("123", coin superieur droit) : le texte de la tuile doit rester sous
-# cette zone (voir BoutonArrondi._dessiner) - largeur du badge + marges.
-MARGE_BADGE_QUANTITE = 48
+# Hauteur de la bande du bas d'une tuile produit, quand elle a un prix/pied
+# et/ou un badge de quantite ("123") - voir BoutonArrondi._dessiner. Sert
+# aussi cote appelant (main.py) pour savoir combien de place reste pour le
+# nom du produit au-dessus.
+HAUTEUR_PIED_TUILE = 38
 
 POLICE_TITRE = ("Georgia", 26, "bold")
 POLICE_BADGE = ("Segoe UI", 10, "bold")
@@ -172,16 +173,21 @@ def rectangle_arrondi(canvas, x1, y1, x2, y2, rayon, **kwargs):
 class BoutonArrondi(tk.Canvas):
     """Bouton a coins arrondis dessine sur un Canvas (Tkinter n'a pas de
     bouton arrondi natif). Accepte plusieurs lignes de texte, chacune avec
-    sa propre police/couleur (ex: nom du produit + prix).
+    sa propre police/couleur (ex: le nom d'une categorie).
 
-    Si `commande_quantite` est fourni, un petit badge distinct ("123")
-    apparait dans le coin superieur droit : cliquer dessus appelle
+    `pied` (optionnel) est un texte secondaire (ex: le prix) affiche en bas
+    a gauche, sur une bande dediee en bas de la tuile - separee des lignes
+    principales pour ne jamais les gener, meme quand celles-ci sont ecrites
+    en grand.
+
+    Si `commande_quantite` est fourni, un badge distinct ("123") apparait en
+    bas a droite (sur la meme bande que `pied`) : cliquer dessus appelle
     `commande_quantite` au lieu de `commande` (utilise pour ouvrir le pave
     numerique de quantite sans declencher l'ajout normal x1)."""
 
     def __init__(self, parent, lignes, commande=None, largeur=160, hauteur=76,
                  rayon=14, couleur_fond=BLANC, couleur_bordure=BRUN_200,
-                 bg=CREME, commande_quantite=None, **kwargs):
+                 bg=CREME, commande_quantite=None, pied=None, **kwargs):
         super().__init__(parent, width=largeur, height=hauteur, bg=bg,
                           highlightthickness=0, **kwargs)
         self.commande = commande
@@ -189,6 +195,7 @@ class BoutonArrondi(tk.Canvas):
         self.couleur_fond = couleur_fond
         self.couleur_bordure = couleur_bordure
         self.lignes = lignes
+        self.pied = pied
         self.rayon = rayon
         self._largeur = largeur
         self._hauteur = hauteur
@@ -221,48 +228,44 @@ class BoutonArrondi(tk.Canvas):
         rectangle_arrondi(self, 1, 1, w - 1, h - 1, self.rayon,
                            fill=fond, outline=self.couleur_bordure, width=1)
 
-        # Quand la tuile a un badge de quantite ("123", coin superieur droit),
-        # la 1ere ligne de texte (le nom du produit) tombe dans la meme zone
-        # que ce badge : sans precaution, elle est centree sur toute la
-        # largeur et vient passer dessous, invisible une fois le badge
-        # dessine par-dessus. On decale donc TOUT le texte vers le bas, sous
-        # le badge, plutot que de retrecir sa largeur : retrecir forcait
-        # parfois Tkinter a couper un mot au milieu (ex: "Mille-feuille" /
-        # "s" sur 2 lignes) faute de place, ce qui est pire que le probleme
-        # d'origine. Decaler verticalement laisse toute la largeur au texte.
-        bw, bh = 58, 36
-        marge_badge_haut = 6
-        decalage_bas = MARGE_BADGE_QUANTITE if self.commande_quantite else 0
+        # Le prix/complement ("pied") et le badge de quantite ("123") vivent
+        # tous les deux sur une bande dediee EN BAS de la tuile (pied a
+        # gauche, badge a droite), plutot que le badge en haut a droite
+        # comme avant : ca laissait moins de place au nom du produit, qui
+        # devait etre decale et retreci pour ne pas passer dessous. En bas,
+        # le nom garde toute la tuile pour lui et peut s'afficher plus gros.
+        hauteur_pied = HAUTEUR_PIED_TUILE if (self.pied is not None or self.commande_quantite) else 0
 
-        # Repartition verticale basee sur la vraie hauteur de chaque ligne
-        # (chaque ligne peut avoir sa propre police/taille, notamment sur
-        # les tuiles produits dont la police s'agrandit avec la tuile) :
-        # diviser l'espace en parts egales, comme avant, ne tenait pas
-        # compte de la taille reelle du texte et pouvait faire chevaucher
-        # deux lignes des qu'une police etait agrandie.
-        zone_haut = decalage_bas
-        zone_hauteur = h - decalage_bas
-        # tkfont.Font(font=police) laisse Tk interpreter directement le tuple
-        # (family, taille, style...) : le style peut etre "bold", "italic"
-        # ou les deux, contrairement a un mapping manuel vers weight= qui ne
-        # comprend pas "italic" et plantait sur les lignes en italique.
+        zone_hauteur = h - hauteur_pied
         hauteurs_lignes = [tkfont.Font(font=police).metrics("linespace") for _, police, _ in self.lignes]
         espace_extra = max(zone_hauteur - sum(hauteurs_lignes), 0)
         interligne = espace_extra / (len(self.lignes) + 1) if self.lignes else 0
 
-        y = zone_haut + interligne
+        y = interligne
         for (texte, police, couleur), hauteur_ligne in zip(self.lignes, hauteurs_lignes):
             self.create_text(w / 2, y + hauteur_ligne / 2, text=texte, font=police, fill=couleur,
                               justify="center", width=w - 12)
             y += hauteur_ligne + interligne
 
-        if self.commande_quantite:
-            bx2, by1 = w - 6, marge_badge_haut
-            bx1, by2 = bx2 - bw, by1 + bh
-            self._zone_badge = (bx1, by1, bx2, by2)
-            rectangle_arrondi(self, bx1, by1, bx2, by2, 6, fill=BRUN_700, outline=BRUN_700)
-            self.create_text((bx1 + bx2) / 2, (by1 + by2) / 2, text="123",
-                              font=POLICE_BADGE_QTE, fill=BLANC)
+        if hauteur_pied:
+            y_pied = h - hauteur_pied / 2
+            if self.pied is not None:
+                texte_pied, police_pied, couleur_pied = self.pied
+                largeur_pied = w - 16
+                if self.commande_quantite:
+                    largeur_pied -= 54  # laisse la place au badge a droite
+                self.create_text(10, y_pied, text=texte_pied, font=police_pied, fill=couleur_pied,
+                                  anchor="w", justify="left", width=max(largeur_pied, 20))
+            if self.commande_quantite:
+                bw, bh = 48, 30
+                bx2, by2 = w - 6, h - 4
+                bx1, by1 = bx2 - bw, by2 - bh
+                self._zone_badge = (bx1, by1, bx2, by2)
+                rectangle_arrondi(self, bx1, by1, bx2, by2, 6, fill=BRUN_700, outline=BRUN_700)
+                self.create_text((bx1 + bx2) / 2, (by1 + by2) / 2, text="123",
+                                  font=POLICE_BADGE_QTE, fill=BLANC)
+            else:
+                self._zone_badge = None
         else:
             self._zone_badge = None
 
