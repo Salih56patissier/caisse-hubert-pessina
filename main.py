@@ -442,7 +442,7 @@ class CaisseApp(tk.Tk):
         garde toute la tuile pour lui et peut s'afficher bien plus grand."""
         hauteur_nom_dispo = hauteur_case - HAUTEUR_PIED_TUILE
 
-        police_nom = police_echelle(POLICE_PRODUIT_NOM, hauteur_nom_dispo, taille_min=12, taille_max=26)
+        police_nom = police_echelle(POLICE_PRODUIT_NOM, hauteur_nom_dispo, taille_min=18, taille_max=44)
         police_nom = police_ajustee_a_largeur(nom, police_nom, largeur_case - 20, taille_min=10)
         police_nom, = polices_ajustees_a_hauteur([police_nom], hauteur_nom_dispo, taille_min=10)
 
