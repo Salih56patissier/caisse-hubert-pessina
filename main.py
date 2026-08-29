@@ -11,15 +11,10 @@ Pas encore de mode admin / historique (etapes 4 et 5).
 
 import os
 import sys
+import unicodedata
 import tkinter as tk
 from tkinter import messagebox
 from datetime import datetime
-
-try:
-    from PIL import Image, ImageTk
-except ImportError:  # Pillow absent : le popup de confirmation s'affiche sans logo
-    Image = None
-    ImageTk = None
 
 import database
 import impression
@@ -61,12 +56,24 @@ ICONES_CATEGORIES = {
 }
 
 
+def _normaliser_nom_categorie(nom):
+    """Enleve accents/casse pour comparer les noms de facon tolerante :
+    le nom d'une categorie est libre (saisi dans le Mode Admin, souvent au
+    pluriel - "Tartes", "Sables"...) alors que ICONES_CATEGORIES ci-dessus
+    liste des noms figes (souvent au singulier) - une correspondance exacte
+    ratait donc la plupart des categories reelles du magasin."""
+    sans_accents = unicodedata.normalize("NFKD", nom).encode("ascii", "ignore").decode("ascii")
+    return sans_accents.strip().lower()
+
+
 def _chemin_icone_categorie(nom_categorie):
-    nom_fichier = ICONES_CATEGORIES.get(nom_categorie)
-    if not nom_fichier:
-        return None
-    chemin = os.path.join(DOSSIER_ICONES_CATEGORIES, nom_fichier)
-    return chemin if os.path.isfile(chemin) else None
+    cible = _normaliser_nom_categorie(nom_categorie)
+    for nom_cle, nom_fichier in ICONES_CATEGORIES.items():
+        cle = _normaliser_nom_categorie(nom_cle)
+        if cible == cle or cible.startswith(cle) or cle.startswith(cible):
+            chemin = os.path.join(DOSSIER_ICONES_CATEGORIES, nom_fichier)
+            return chemin if os.path.isfile(chemin) else None
+    return None
 
 
 def _dossier_application():
@@ -931,27 +938,6 @@ class CaisseApp(tk.Tk):
                 "dans le Mode Admin.".format(nom_imprimante, exc),
             )
 
-    def _charger_logo_popup(self):
-        """Logo affiche entre les boutons "Imprimer" et "OK" du popup de fin
-        d'encaissement (logo.png, a cote du programme). Charge et redimensionne
-        une seule fois puis reutilise a chaque popup ; renvoie None (popup
-        affiche sans logo) si Pillow est absent ou le fichier introuvable/
-        illisible - jamais une exception qui empecherait la confirmation de
-        vente de s'afficher."""
-        if hasattr(self, "_logo_popup_photo"):
-            return self._logo_popup_photo
-        photo = None
-        if Image is not None and ImageTk is not None:
-            chemin = os.path.join(_dossier_application(), "logo.png")
-            try:
-                image = Image.open(chemin)
-                image.thumbnail((150, 150), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(image)
-            except (OSError, ValueError):
-                photo = None
-        self._logo_popup_photo = photo
-        return photo
-
     def _afficher_confirmation_encaissement(self, total):
         """Grande confirmation visuelle (plus lisible qu'une boite de dialogue
         systeme standard). Reste affichee tant que le bouton OK n'est pas
@@ -959,10 +945,11 @@ class CaisseApp(tk.Tk):
         ou un effleurement accidentel sur l'ecran tactile ne peut donc pas la
         faire disparaitre ni declencher autre chose derriere.
 
-        Imprimer (en haut) et OK (tout en bas, separes par le logo au milieu)
-        sont volontairement tres eloignes l'un de l'autre : rapproches, un
-        caissier presse pouvait appuyer sur OK en visant Imprimer (ou l'inverse)
-        juste apres avoir encaisse."""
+        Imprimer (en haut) et OK (tout en bas) sont volontairement tres
+        eloignes l'un de l'autre - "Vente encaissee" + le montant occupent
+        tout l'espace entre les deux, au milieu : rapproches, un caissier
+        presse pouvait appuyer sur OK en visant Imprimer (ou l'inverse) juste
+        apres avoir encaisse."""
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
         popup.attributes("-topmost", True)
@@ -973,31 +960,30 @@ class CaisseApp(tk.Tk):
         y = self.winfo_rooty() + (self.winfo_height() - hauteur) // 2
         popup.geometry("{}x{}+{}+{}".format(largeur, hauteur, x, y))
 
-        tk.Label(popup, text="Vente encaissee", font=("Segoe UI", 30, "bold"),
-                 bg=ROSE, fg=BLANC).pack(side="top", pady=(36, 10))
-        tk.Label(popup, text="{:g} DH".format(total), font=("Georgia", 64, "bold"),
-                 bg=ROSE, fg=BLANC).pack(side="top", pady=(0, 20))
-
-        # OK est empaquete en 2e (mais avec side="bottom") pour rester colle
-        # tout en bas quelle que soit la taille prise par le logo au milieu.
+        # OK et Imprimer sont empaquetes en 1er (avec side="top"/"bottom")
+        # pour rester colles en haut/en bas quelle que soit la taille prise
+        # par le texte au milieu.
+        BoutonArrondi(
+            popup, lignes=[("Imprimer le ticket", ("Segoe UI", 16, "bold"), ROSE)],
+            commande=self._imprimer_dernier_ticket, largeur=320, hauteur=54, rayon=14,
+            couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
+        ).pack(side="top", pady=(36, 0))
         BoutonArrondi(
             popup, lignes=[("OK", ("Segoe UI", 26, "bold"), ROSE)],
             commande=popup.destroy, largeur=220, hauteur=70, rayon=16,
             couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
         ).pack(side="bottom", pady=(0, 32))
-        BoutonArrondi(
-            popup, lignes=[("Imprimer le ticket", ("Segoe UI", 16, "bold"), ROSE)],
-            commande=self._imprimer_dernier_ticket, largeur=320, hauteur=54, rayon=14,
-            couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
-        ).pack(side="top", pady=(0, 10))
 
-        # Logo au milieu : occupe tout l'espace restant entre les 2 boutons
-        # (c'est cet espace qui les eloigne l'un de l'autre), centre dedans.
-        zone_logo = tk.Frame(popup, bg=ROSE)
-        zone_logo.pack(side="top", fill="both", expand=True)
-        logo = self._charger_logo_popup()
-        if logo is not None:
-            tk.Label(zone_logo, image=logo, bg=ROSE).pack(expand=True)
+        # "Vente encaissee" + montant : centres (horizontalement ET
+        # verticalement) dans tout l'espace restant entre les 2 boutons.
+        zone_centre = tk.Frame(popup, bg=ROSE)
+        zone_centre.pack(side="top", fill="both", expand=True)
+        bloc_texte = tk.Frame(zone_centre, bg=ROSE)
+        bloc_texte.pack(expand=True)
+        tk.Label(bloc_texte, text="Vente encaissee", font=("Segoe UI", 30, "bold"),
+                 bg=ROSE, fg=BLANC).pack(pady=(0, 10))
+        tk.Label(bloc_texte, text="{:g} DH".format(total), font=("Georgia", 64, "bold"),
+                 bg=ROSE, fg=BLANC).pack()
 
         popup.grab_set()  # bloque le reste de l'ecran tant que OK n'est pas presse
 
