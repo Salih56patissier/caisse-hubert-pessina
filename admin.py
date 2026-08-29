@@ -17,36 +17,28 @@ from styles import (
     BoutonArrondi, ScrollableFrame, largeur_texte, rectangle_arrondi, zone_travail_windows,
 )
 
-SEUIL_GLISSEMENT_PX = 6  # deplacement minimal (px) avant de considerer que c'est un glisser, pas un tap
 PADDING_BOUTON = 48  # marge interne (gauche+droite) pour qu'un texte ne touche jamais le bord
 PADDING_BOUTON_COMPACT = 32  # meme chose, pour les petits boutons ronds Modifier/Supprimer
 HAUTEUR_PASTILLE_ADMIN = 50
 ESPACE_PASTILLE_ADMIN = 10
 
 
-class PastilleCategorieDeplacable(tk.Canvas):
-    """Pastille de categorie utilisee dans le Mode Admin : un tap normal
-    selectionne la categorie, un glisser (horizontal ou vertical, la liste
-    peut tenir sur plusieurs lignes) permet de la reordonner parmi les
-    autres (position persistee en base a la fin du glisser)."""
+class PastilleCategorie(tk.Canvas):
+    """Pastille de categorie utilisee dans le Mode Admin : un tap la
+    selectionne. (Le reordonnancement se fait via les boutons fleches
+    "Deplacer" a cote de "Modifier"/"Supprimer" une fois la categorie
+    selectionnee - pas par glisser-deposer : sur l'ecran tactile du magasin,
+    le glisser-deposer precedent etait instable - la pastille tremblait et
+    sautait, rendant tres difficile de la lacher a la bonne place.)"""
 
-    def __init__(self, parent, categorie_id, nom, actif, largeur, hauteur,
-                 on_tap, on_debut_glissement, on_glissement, on_fin_glissement, bg=CREME):
+    def __init__(self, parent, categorie_id, nom, actif, largeur, hauteur, on_tap, bg=CREME):
         super().__init__(parent, width=largeur, height=hauteur, bg=bg, highlightthickness=0)
         self.categorie_id = categorie_id
         self.largeur = largeur
         self.hauteur = hauteur
-        self.on_tap = on_tap
-        self.on_debut_glissement = on_debut_glissement
-        self.on_glissement = on_glissement
-        self.on_fin_glissement = on_fin_glissement
-        self._point_depart = None
-        self._a_glisse = False
 
         self._dessiner(nom, actif)
-        self.bind("<ButtonPress-1>", self._sur_presse)
-        self.bind("<B1-Motion>", self._sur_glissement)
-        self.bind("<ButtonRelease-1>", self._sur_relachement)
+        self.bind("<ButtonRelease-1>", lambda event: on_tap(self.categorie_id))
 
     def _dessiner(self, nom, actif):
         self.delete("all")
@@ -55,24 +47,6 @@ class PastilleCategorieDeplacable(tk.Canvas):
                            outline=BRUN_700 if actif else BRUN_200)
         self.create_text(self.largeur / 2, self.hauteur / 2, text=nom, font=POLICE_CATEGORIE,
                           fill=BLANC if actif else BRUN_700)
-
-    def _sur_presse(self, event):
-        self._point_depart = (event.x_root, event.y_root)
-        self._a_glisse = False
-        self.on_debut_glissement(self)
-
-    def _sur_glissement(self, event):
-        dx = event.x_root - self._point_depart[0]
-        dy = event.y_root - self._point_depart[1]
-        if abs(dx) > SEUIL_GLISSEMENT_PX or abs(dy) > SEUIL_GLISSEMENT_PX:
-            self._a_glisse = True
-        self.on_glissement(self, dx, dy)
-
-    def _sur_relachement(self, event):
-        if self._a_glisse:
-            self.on_fin_glissement(self)
-        else:
-            self.on_tap(self.categorie_id)
 
 
 class FenetreAdmin(tk.Toplevel):
@@ -124,7 +98,7 @@ class FenetreAdmin(tk.Toplevel):
         cadre_interne = tk.Frame(self.contenu, bg=CREME)
         cadre_interne.pack(fill="x", padx=20, pady=16)
 
-        tk.Label(cadre_interne, text="Categories (glisser une pastille pour la reordonner)",
+        tk.Label(cadre_interne, text="Categories (selectionnez-en une, puis Deplacer pour la reordonner)",
                  font=POLICE_SOUS_TITRE, bg=CREME, fg=BRUN_700).pack(anchor="w", pady=(0, 6))
         self.frame_categories = tk.Frame(cadre_interne, bg=CREME)
         self.frame_categories.pack(anchor="w", fill="x", pady=(0, 10))
@@ -266,17 +240,12 @@ class FenetreAdmin(tk.Toplevel):
         categories = self.conn.execute("SELECT * FROM categories ORDER BY ordre, id").fetchall()
 
         self.pastilles_categories = []  # liste ordonnee de {id, widget, x, y, largeur}
-        self.pastille_en_glissement = None
         for cat in categories:
             actif = cat["id"] == self.categorie_selectionnee_id
             largeur = largeur_texte(cat["nom"], POLICE_CATEGORIE) + 44
-            pastille = PastilleCategorieDeplacable(
+            pastille = PastilleCategorie(
                 self.frame_categories, cat["id"], cat["nom"], actif, largeur, HAUTEUR_PASTILLE_ADMIN,
-                on_tap=self._selectionner_categorie,
-                on_debut_glissement=self._debut_glissement_categorie,
-                on_glissement=self._pendant_glissement_categorie,
-                on_fin_glissement=self._fin_glissement_categorie,
-                bg=CREME,
+                on_tap=self._selectionner_categorie, bg=CREME,
             )
             self.pastilles_categories.append({"id": cat["id"], "widget": pastille, "x": 0, "y": 0, "largeur": largeur})
 
@@ -294,54 +263,7 @@ class FenetreAdmin(tk.Toplevel):
         self._charger_produits()
         self._construire_actions_categorie()
 
-    def _debut_glissement_categorie(self, pastille):
-        self.pastille_en_glissement = pastille
-        # NB: Canvas.tkraise() est en fait un alias de tag_raise() en Tkinter
-        # (leve un objet DANS le canvas, pas le widget lui-meme) ; on appelle
-        # donc directement la commande Tk 'raise' pour mettre ce widget au
-        # premier plan parmi ses freres (utile pendant le glisser).
-        pastille.tk.call("raise", pastille._w)
-
-    def _pendant_glissement_categorie(self, pastille, dx, dy):
-        info = self._info_pastille(pastille)
-        if info is None:
-            return
-        nouvelle_x, nouvelle_y = info["x"] + dx, info["y"] + dy
-        pastille.place(x=nouvelle_x, y=nouvelle_y)
-        self._reordonner_pendant_glissement(pastille, nouvelle_x, nouvelle_y)
-
-    def _info_pastille(self, pastille):
-        for info in self.pastilles_categories:
-            if info["widget"] is pastille:
-                return info
-        return None
-
-    def _reordonner_pendant_glissement(self, pastille_glissee, x_actuelle, y_actuelle):
-        """Sur plusieurs lignes, on cherche la pastille la plus proche (au
-        centre) de la position de glissement, dans les 2 dimensions, plutot
-        que juste comparer les x comme sur une seule ligne."""
-        centre_glisse = (x_actuelle + pastille_glissee.largeur / 2, y_actuelle + HAUTEUR_PASTILLE_ADMIN / 2)
-        index_actuel = next(
-            i for i, info in enumerate(self.pastilles_categories) if info["widget"] is pastille_glissee
-        )
-        meilleur_index, meilleure_distance = None, None
-        for i, info in enumerate(self.pastilles_categories):
-            if info["widget"] is pastille_glissee:
-                continue
-            centre_autre = (info["x"] + info["largeur"] / 2, info["y"] + HAUTEUR_PASTILLE_ADMIN / 2)
-            distance = (centre_glisse[0] - centre_autre[0]) ** 2 + (centre_glisse[1] - centre_autre[1]) ** 2
-            if meilleure_distance is None or distance < meilleure_distance:
-                meilleure_distance, meilleur_index = distance, i
-        if meilleur_index is not None and meilleur_index != index_actuel:
-            self._echanger_pastilles(index_actuel, meilleur_index)
-
-    def _echanger_pastilles(self, i, j):
-        self.pastilles_categories[i], self.pastilles_categories[j] = (
-            self.pastilles_categories[j], self.pastilles_categories[i],
-        )
-        self._replacer_pastilles(sauf=self.pastille_en_glissement)
-
-    def _replacer_pastilles(self, sauf=None):
+    def _replacer_pastilles(self):
         if not hasattr(self, "pastilles_categories"):
             return
         largeur_dispo = self.frame_categories.winfo_width()
@@ -353,8 +275,7 @@ class FenetreAdmin(tk.Toplevel):
             if x > 0 and x + info["largeur"] > largeur_dispo:
                 x, y = 0, y + HAUTEUR_PASTILLE_ADMIN + ESPACE_PASTILLE_ADMIN
             info["x"], info["y"] = x, y
-            if info["widget"] is not sauf:
-                info["widget"].place(x=x, y=y, width=info["largeur"], height=HAUTEUR_PASTILLE_ADMIN)
+            info["widget"].place(x=x, y=y, width=info["largeur"], height=HAUTEUR_PASTILLE_ADMIN)
             x += info["largeur"] + ESPACE_PASTILLE_ADMIN
 
         if hasattr(self, "bouton_ajout_categorie"):
@@ -364,11 +285,21 @@ class FenetreAdmin(tk.Toplevel):
 
         self.frame_categories.configure(height=y + HAUTEUR_PASTILLE_ADMIN)
 
-    def _fin_glissement_categorie(self, pastille):
-        self.pastille_en_glissement = None
-        self._replacer_pastilles()
+    def _deplacer_categorie(self, direction):
+        """direction : -1 pour deplacer la categorie selectionnee un cran
+        plus tot, +1 pour un cran plus tard. Remplace l'ancien glisser-deposer
+        (instable sur l'ecran tactile du magasin) par un simple tap, fiable
+        quel que soit l'appareil."""
+        if self.categorie_selectionnee_id is None:
+            return
         ids_ordonnes = [info["id"] for info in self.pastilles_categories]
+        i = ids_ordonnes.index(self.categorie_selectionnee_id)
+        j = i + direction
+        if j < 0 or j >= len(ids_ordonnes):
+            return  # deja au bout, rien a faire
+        ids_ordonnes[i], ids_ordonnes[j] = ids_ordonnes[j], ids_ordonnes[i]
         database.definir_ordre_categories(self.conn, ids_ordonnes)
+        self._charger_categories()
 
     def _selectionner_categorie(self, categorie_id):
         self.categorie_selectionnee_id = categorie_id
@@ -399,6 +330,18 @@ class FenetreAdmin(tk.Toplevel):
 
         tk.Label(self.frame_categorie_actions, text="Categorie selectionnee : {}".format(categorie["nom"]),
                   font=POLICE_PRODUIT_NOM, bg=CREME, fg=BRUN_700).pack(side="left", padx=(0, 14))
+        BoutonArrondi(
+            self.frame_categorie_actions, lignes=[("< Deplacer", POLICE_BOUTON_ROND, BLANC)],
+            commande=lambda: self._deplacer_categorie(-1),
+            largeur=largeur_texte("< Deplacer", POLICE_BOUTON_ROND) + PADDING_BOUTON_COMPACT,
+            hauteur=40, rayon=10, couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=CREME,
+        ).pack(side="left", padx=(0, 4))
+        BoutonArrondi(
+            self.frame_categorie_actions, lignes=[("Deplacer >", POLICE_BOUTON_ROND, BLANC)],
+            commande=lambda: self._deplacer_categorie(1),
+            largeur=largeur_texte("Deplacer >", POLICE_BOUTON_ROND) + PADDING_BOUTON_COMPACT,
+            hauteur=40, rayon=10, couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=CREME,
+        ).pack(side="left", padx=(0, 14))
         BoutonArrondi(
             self.frame_categorie_actions, lignes=[("Modifier", POLICE_BOUTON_ROND, BLANC)],
             commande=lambda c=categorie: self._ouvrir_modifier_categorie(c),
@@ -456,7 +399,7 @@ class FenetreAdmin(tk.Toplevel):
         ).pack(anchor="w", pady=(0, 10))
 
         produits = self.conn.execute(
-            "SELECT * FROM produits WHERE categorie_id = ? ORDER BY id",
+            "SELECT * FROM produits WHERE categorie_id = ? ORDER BY nom COLLATE NOCASE",
             (self.categorie_selectionnee_id,),
         ).fetchall()
         for produit in produits:

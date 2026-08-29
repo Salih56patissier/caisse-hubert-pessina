@@ -15,6 +15,12 @@ import tkinter as tk
 from tkinter import messagebox
 from datetime import datetime
 
+try:
+    from PIL import Image, ImageTk
+except ImportError:  # Pillow absent : le popup de confirmation s'affiche sans logo
+    Image = None
+    ImageTk = None
+
 import database
 import impression
 from admin import FenetreAdmin
@@ -37,6 +43,16 @@ from styles import (
 # que la version testee sur un poste est bien la derniere (et pas un ancien
 # .exe reste sur le PC).
 VERSION_APP = "2026-08-14.1"
+
+
+def _dossier_application():
+    """Dossier ou se trouve le programme : celui de l'executable une fois
+    empaquete (PyInstaller), celui du fichier source sinon. Sert a retrouver
+    les fichiers a cote du programme (logo, logs...) quel que soit le dossier
+    depuis lequel il est lance."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 # Taille de fenetre adaptee a la zone de travail reelle du poste (hors barre
 # des taches), plafonnee a une taille raisonnable : jamais plus grande que
@@ -504,7 +520,7 @@ class CaisseApp(tk.Tk):
         ).place(x=214, y=8)
 
         produits = self.conn.execute(
-            "SELECT * FROM produits WHERE categorie_id = ? ORDER BY id",
+            "SELECT * FROM produits WHERE categorie_id = ? ORDER BY nom COLLATE NOCASE",
             (self.categorie_active_id,),
         ).fetchall()
 
@@ -881,37 +897,73 @@ class CaisseApp(tk.Tk):
                 "dans le Mode Admin.".format(nom_imprimante, exc),
             )
 
+    def _charger_logo_popup(self):
+        """Logo affiche entre les boutons "Imprimer" et "OK" du popup de fin
+        d'encaissement (logo.png, a cote du programme). Charge et redimensionne
+        une seule fois puis reutilise a chaque popup ; renvoie None (popup
+        affiche sans logo) si Pillow est absent ou le fichier introuvable/
+        illisible - jamais une exception qui empecherait la confirmation de
+        vente de s'afficher."""
+        if hasattr(self, "_logo_popup_photo"):
+            return self._logo_popup_photo
+        photo = None
+        if Image is not None and ImageTk is not None:
+            chemin = os.path.join(_dossier_application(), "logo.png")
+            try:
+                image = Image.open(chemin)
+                image.thumbnail((150, 150), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(image)
+            except (OSError, ValueError):
+                photo = None
+        self._logo_popup_photo = photo
+        return photo
+
     def _afficher_confirmation_encaissement(self, total):
         """Grande confirmation visuelle (plus lisible qu'une boite de dialogue
         systeme standard). Reste affichee tant que le bouton OK n'est pas
         presse (et bloque le reste de l'ecran pendant ce temps) : une mouche
         ou un effleurement accidentel sur l'ecran tactile ne peut donc pas la
-        faire disparaitre ni declencher autre chose derriere."""
+        faire disparaitre ni declencher autre chose derriere.
+
+        Imprimer (en haut) et OK (tout en bas, separes par le logo au milieu)
+        sont volontairement tres eloignes l'un de l'autre : rapproches, un
+        caissier presse pouvait appuyer sur OK en visant Imprimer (ou l'inverse)
+        juste apres avoir encaisse."""
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
         popup.attributes("-topmost", True)
         popup.configure(bg=ROSE)
 
-        largeur, hauteur = 560, 480
+        largeur, hauteur = 560, 600
         x = self.winfo_rootx() + (self.winfo_width() - largeur) // 2
         y = self.winfo_rooty() + (self.winfo_height() - hauteur) // 2
         popup.geometry("{}x{}+{}+{}".format(largeur, hauteur, x, y))
 
         tk.Label(popup, text="Vente encaissee", font=("Segoe UI", 30, "bold"),
-                 bg=ROSE, fg=BLANC).pack(pady=(40, 10))
+                 bg=ROSE, fg=BLANC).pack(side="top", pady=(36, 10))
         tk.Label(popup, text="{:g} DH".format(total), font=("Georgia", 64, "bold"),
-                 bg=ROSE, fg=BLANC).pack(pady=(0, 30))
+                 bg=ROSE, fg=BLANC).pack(side="top", pady=(0, 20))
 
-        BoutonArrondi(
-            popup, lignes=[("Imprimer le ticket", ("Segoe UI", 16, "bold"), ROSE)],
-            commande=self._imprimer_dernier_ticket, largeur=320, hauteur=54, rayon=14,
-            couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
-        ).pack(pady=(0, 14))
+        # OK est empaquete en 2e (mais avec side="bottom") pour rester colle
+        # tout en bas quelle que soit la taille prise par le logo au milieu.
         BoutonArrondi(
             popup, lignes=[("OK", ("Segoe UI", 26, "bold"), ROSE)],
             commande=popup.destroy, largeur=220, hauteur=70, rayon=16,
             couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
-        ).pack()
+        ).pack(side="bottom", pady=(0, 32))
+        BoutonArrondi(
+            popup, lignes=[("Imprimer le ticket", ("Segoe UI", 16, "bold"), ROSE)],
+            commande=self._imprimer_dernier_ticket, largeur=320, hauteur=54, rayon=14,
+            couleur_fond=BLANC, couleur_bordure=BLANC, bg=ROSE,
+        ).pack(side="top", pady=(0, 10))
+
+        # Logo au milieu : occupe tout l'espace restant entre les 2 boutons
+        # (c'est cet espace qui les eloigne l'un de l'autre), centre dedans.
+        zone_logo = tk.Frame(popup, bg=ROSE)
+        zone_logo.pack(side="top", fill="both", expand=True)
+        logo = self._charger_logo_popup()
+        if logo is not None:
+            tk.Label(zone_logo, image=logo, bg=ROSE).pack(expand=True)
 
         popup.grab_set()  # bloque le reste de l'ecran tant que OK n'est pas presse
 
@@ -922,8 +974,7 @@ def _ecrire_diagnostic_demarrage():
     verifier a distance, sans ambiguite, si un probleme d'affichage vient
     d'une mauvaise detection d'ecran ou d'autre chose (ex: ancienne version
     encore lancee par erreur)."""
-    dossier = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) \
-        else os.path.dirname(os.path.abspath(__file__))
+    dossier = _dossier_application()
     texte = "Version app : {}\nTaille fenetre max autorisee : {}x{}\n{}".format(
         VERSION_APP, LARGEUR_FENETRE_MAX, HAUTEUR_FENETRE_MAX, diagnostiquer_ecran(),
     )
