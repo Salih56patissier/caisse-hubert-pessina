@@ -19,7 +19,7 @@ from datetime import datetime
 import database
 import impression
 from admin import FenetreAdmin
-from historique import FenetreHistorique, FenetreRecap
+from historique import FenetreHistorique, FenetreRecap, FenetrePeriode
 from pave_numerique import PaveNumerique
 from styles import (
     BLANC, BRUN_200, BRUN_500, BRUN_700, BRUN_800, CREME, OR, ROSE, ROUGE, VERT, COULEURS_CATEGORIES,
@@ -230,7 +230,9 @@ class CaisseApp(tk.Tk):
         by1 = 16
         by2 = by1 + 34
         bx2 = w - 14
-        for cle, texte in (("admin", "Admin"), ("recap", "Recap"), ("historique", "Historique")):
+        for cle, texte in (
+            ("admin", "Admin"), ("recap", "Recap"), ("historique", "Historique"), ("periode", "Periode"),
+        ):
             bx1 = bx2 - 90
             self._zones_boutons_entete[cle] = (bx1, by1, bx2, by2)
             rectangle_arrondi(canvas, bx1, by1, bx2, by2, 10, fill="#d16a91", outline=BLANC)
@@ -246,6 +248,8 @@ class CaisseApp(tk.Tk):
                     self._demander_pin(self._ouvrir_historique)
                 elif cle == "recap":
                     self._demander_pin(self._ouvrir_recap)
+                elif cle == "periode":
+                    self._demander_pin(self._ouvrir_periode)
                 return
 
     def _demander_pin(self, callback_si_correct):
@@ -278,6 +282,9 @@ class CaisseApp(tk.Tk):
 
     def _ouvrir_recap(self):
         FenetreRecap(self, self.conn)
+
+    def _ouvrir_periode(self):
+        FenetrePeriode(self, self.conn)
 
     def _construire_ticket(self, zone_ticket):
         # Les zones du haut et du bas ont une taille FIXE (pack_propagate
