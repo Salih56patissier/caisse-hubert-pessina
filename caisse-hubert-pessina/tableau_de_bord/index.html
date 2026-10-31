@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<!-- This site is hosted on Netlify. Anyone can build and deploy a site
+     like this one for free: https://netlify.new/?utm_campaign=loops&utm_source=ai-legible&utm_medium=owned&utm_content=comment&utm_id=cf71e39e-6395-4c52-b402-49c20fb7bbbd
+     Netlify hosting facts for this site: static/SSR served via Netlify Edge. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Hubert &amp; Pessina</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --rose: #e75480; --rose-fonce: #c2185b; --brun-900: #3e2723; --brun-800: #4a2f2a; --brun-700: #5d4037;
+    --brun-500: #8d6e63; --brun-200: #d7ccc8; --brun-100: #efebe9; --creme: #faf6f1; --or: #c17f2b;
+    --vert: #3f9142; --rouge: #d1554a; --blanc: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--creme); color: var(--brun-800); font-family: Inter, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  header { background: linear-gradient(90deg, var(--rose), var(--rose-fonce)); color: var(--blanc); padding: 14px 16px 12px; position: sticky; top: 0; z-index: 5; }
+  header .ligne { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  header h1 { font-family: "Playfair Display", Georgia, serif; font-size: 22px; margin: 0; }
+  header .maj { font-size: 11px; opacity: .85; margin-top: 2px; }
+  header button { background: rgba(255,255,255,.2); border: 0; color: #fff; border-radius: 10px; padding: 8px 10px; font-weight: 700; font-size: 13px; }
+  nav.fil { display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 16px 0; font-size: 13px; }
+  nav.fil a { color: var(--brun-500); text-decoration: none; font-weight: 600; }
+  nav.fil a::after { content: " ›"; color: var(--brun-200); }
+  nav.fil span { color: var(--brun-800); font-weight: 700; }
+  main { padding: 10px 16px 40px; max-width: 900px; margin: 0 auto; }
+  .titre-periode { display: flex; align-items: center; justify-content: space-between; margin: 6px 0 12px; }
+  .titre-periode h2 { font-family: "Playfair Display", Georgia, serif; font-size: 24px; margin: 0; text-align: center; flex: 1; text-transform: capitalize; }
+  .fleche { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--brun-200); background: var(--blanc); color: var(--brun-700); font-size: 20px; font-weight: 700; }
+  .fleche:disabled { opacity: .3; }
+  .grille-kpi { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  @media (min-width: 640px) { .grille-kpi { grid-template-columns: repeat(4, 1fr); } }
+  .kpi { background: var(--blanc); border-radius: 14px; padding: 12px 14px; border: 1px solid var(--brun-100); }
+  .kpi .val { font-size: 22px; font-weight: 700; color: var(--brun-900); font-variant-numeric: tabular-nums; }
+  .kpi .lib { font-size: 12px; color: var(--brun-500); margin-top: 2px; }
+  .kpi.grand { grid-column: span 2; background: var(--brun-800); color: #fff; border: 0; }
+  .kpi.grand .val { color: #fff; font-size: 30px; }
+  .kpi.grand .lib { color: var(--brun-200); }
+  .kpi.alerte { border: 2px solid var(--rouge); }
+  .kpi.alerte .val { color: var(--rouge); }
+  .kpi.ok .val { color: var(--vert); }
+  section.bloc { background: var(--blanc); border-radius: 14px; padding: 14px; margin-top: 12px; border: 1px solid var(--brun-100); }
+  section.bloc h3 { margin: 0 0 10px; font-size: 15px; color: var(--brun-700); display: flex; justify-content: space-between; align-items: baseline; }
+  section.bloc h3 small { font-weight: 400; color: var(--brun-500); font-size: 12px; }
+  .barre-ligne { display: grid; grid-template-columns: 84px 1fr 112px; gap: 8px; align-items: center; margin: 7px 0; font-size: 13px; }
+  .barre-ligne .piste { background: var(--brun-100); border-radius: 6px; height: 14px; overflow: hidden; }
+  .barre-ligne .rempli { height: 100%; background: var(--or); border-radius: 6px; }
+  .barre-ligne .chiffre { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .barre-ligne .chiffre small { display: block; font-weight: 400; color: var(--brun-500); font-size: 11px; }
+  .repartition { display: flex; height: 16px; border-radius: 8px; overflow: hidden; margin: 6px 0 6px; background: var(--brun-100); }
+  .repartition div { height: 100%; }
+  .legende { display: flex; gap: 14px; font-size: 12px; color: var(--brun-500); flex-wrap: wrap; }
+  .legende i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--brun-500); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding: 4px 4px 6px; }
+  td { padding: 7px 4px; border-top: 1px solid var(--brun-100); font-variant-numeric: tabular-nums; }
+  td.num, th.num { text-align: right; }
+  .pastille { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; }
+  .pastille.ok { background: #e3f1e3; color: var(--vert); }
+  .pastille.ko { background: #fbe4e2; color: var(--rouge); }
+  .pastille.neutre { background: var(--brun-100); color: var(--brun-500); }
+  .calendrier { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+  .calendrier .entete { text-align: center; font-size: 11px; color: var(--brun-500); font-weight: 600; padding-bottom: 2px; }
+  .jour { aspect-ratio: 1 / 1.05; border-radius: 10px; background: var(--brun-100); border: 0; padding: 4px 2px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; font-family: inherit; color: var(--brun-800); position: relative; }
+  .jour .n { font-size: 12px; font-weight: 700; }
+  .jour .ca { font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .jour.vide { background: transparent; }
+  .jour.aujourdhui { outline: 2px solid var(--rose); }
+  .jour .point { position: absolute; top: 4px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--rouge); }
+  .cartes-mois { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  @media (min-width: 640px) { .cartes-mois { grid-template-columns: repeat(3, 1fr); } }
+  .carte-mois { background: var(--blanc); border: 1px solid var(--brun-100); border-radius: 14px; padding: 12px; text-align: left; font-family: inherit; color: var(--brun-800); }
+  .carte-mois .nom { font-weight: 700; text-transform: capitalize; }
+  .carte-mois .ca { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .carte-mois .mini { height: 6px; background: var(--brun-100); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .carte-mois .mini div { height: 100%; background: var(--rose); }
+  .carte-mois .det { font-size: 11px; color: var(--brun-500); margin-top: 6px; }
+  .carte-mois.sans { opacity: .45; }
+  details { margin-top: 12px; background: var(--blanc); border-radius: 14px; border: 1px solid var(--brun-100); padding: 12px 14px; }
+  summary { font-weight: 700; color: var(--brun-700); font-size: 15px; cursor: pointer; }
+  .ticket { border-top: 1px dashed var(--brun-200); padding: 8px 0; font-size: 13px; }
+  .ticket .haut { display: flex; justify-content: space-between; font-weight: 700; }
+  .ticket .bas { color: var(--brun-500); font-size: 12px; margin-top: 2px; }
+  .vide-msg { text-align: center; color: var(--brun-500); padding: 40px 10px; }
+  .chargement { text-align: center; padding: 80px 20px; color: var(--brun-500); }
+  .rond { width: 36px; height: 36px; border: 4px solid var(--brun-100); border-top-color: var(--rose); border-radius: 50%; margin: 0 auto 14px; animation: t 1s linear infinite; }
+  @keyframes t { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div class="ligne">
+    <div>
+      <h1>Hubert &amp; Pessina</h1>
+      <div class="maj" id="maj">Tableau de bord</div>
+    </div>
+    <button id="actualiser">Actualiser</button>
+  </div>
+</header>
+<nav class="fil" id="fil"></nav>
+<main id="contenu"><div class="chargement"><div class="rond"></div>Chargement des donnees...</div></main>
+
+<script>
+var API = "A_REMPLACER_PAR_L_URL_DU_SCRIPT_GOOGLE";
+var MOIS = ["janvier","fevrier","mars","avril","mai","juin","juillet","aout","septembre","octobre","novembre","decembre"];
+var JOURS = ["dimanche","lundi","mardi","mercredi","jeudi","vendredi","samedi"];
+var TOLERANCE = 10;
+var D = null;          // donnees brutes
+var IDX = null;        // index par jour
+var vue = { niveau: "jour", annee: null, mois: null, jour: null };
+
+function dh(x) { return (Math.round((x || 0) * 100) / 100).toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " DH"; }
+function dhEntier(x) { return Math.round(x || 0).toLocaleString("fr-FR") + " DH"; }
+function signe(x) { var s = (Math.round(x * 100) / 100).toLocaleString("fr-FR"); return (x > 0 ? "+" : "") + s + " DH"; }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+function cle(a, m, j) { return a + "-" + String(m).padStart(2, "0") + "-" + String(j).padStart(2, "0"); }
+function num(v) { var n = parseFloat(String(v).replace(",", ".")); return isNaN(n) ? null : n; }
+
+// ---------------------------------------------------------------- index
+function indexer(d) {
+  var jours = {};
+  function j(date) {
+    if (!jours[date]) jours[date] = { ventes: [], annulees: [], comptages: [], sorties: [], tiroir: [] };
+    return jours[date];
+  }
+  d.ventes.forEach(function (v) { j(v.date).ventes.push(v); });
+  d.annulees.forEach(function (v) { j(v.date).annulees.push(v); });
+  d.comptages.forEach(function (c) { j(c.date).comptages.push(c); });
+  d.sorties.forEach(function (s) { j(s.date).sorties.push(s); });
+  d.tiroir.forEach(function (t) { j(t.date).tiroir.push(t); });
+  return jours;
+}
+
+function resume(listeJours) {
+  var r = { ca: 0, tickets: 0, especes: 0, carte: 0, rapides: 0, caRapides: 0, ecart: 0, ecartsKo: 0, nbComptages: 0,
+            depots: 0, sorties: 0, sansVente: 0, nbAnnulees: 0, caAnnule: 0, creneaux: [0, 0, 0], tCreneaux: [0, 0, 0], vendeurs: {}, produits: {} };
+  listeJours.forEach(function (J) {
+    if (!J) return;
+    J.annulees.forEach(function (v) { r.nbAnnulees++; r.caAnnule += v.total; });
+    J.ventes.forEach(function (v) {
+      r.ca += v.total; r.tickets++;
+      if (v.paiement === "carte") r.carte += v.total; else r.especes += v.total;
+      if (v.type === "rapide") { r.rapides++; r.caRapides += v.total; }
+      var h = parseInt(v.heure, 10), c = h < 12 ? 0 : (h < 16 ? 1 : 2);
+      r.creneaux[c] += v.total; r.tCreneaux[c]++;
+      var n = v.vendeur || "(sans vendeur)";
+      var vd = r.vendeurs[n] || (r.vendeurs[n] = { ca: 0, tickets: 0, ecart: 0, sansVente: 0, ecartsKo: 0 });
+      vd.ca += v.total; vd.tickets++;
+      (v.detail || "").split("; ").forEach(function (p) {
+        var m = p.match(/^([\d.,]+)x (.+)$/);
+        if (m && m[2].indexOf("Vente rapide") !== 0) r.produits[m[2]] = (r.produits[m[2]] || 0) + parseFloat(m[1]);
+      });
+    });
+    J.comptages.forEach(function (c) {
+      r.nbComptages++;
+      if (c.ecart !== null) {
+        r.ecart += c.ecart;
+        var ko = Math.abs(c.ecart) > TOLERANCE + 1e-9;
+        if (ko) r.ecartsKo++;
+        var n = c.vendeur || "(sans vendeur)";
+        var vd = r.vendeurs[n] || (r.vendeurs[n] = { ca: 0, tickets: 0, ecart: 0, sansVente: 0, ecartsKo: 0 });
+        vd.ecart += c.ecart; if (ko) vd.ecartsKo++;
+      }
+    });
+    J.sorties.forEach(function (s) { if (s.type === "Depot coffre") r.depots += s.montant; else r.sorties += s.montant; });
+    J.tiroir.forEach(function (t) {
+      if (t.type === "sans_vente") {
+        r.sansVente++;
+        var n = t.vendeur || "(sans vendeur)";
+        var vd = r.vendeurs[n] || (r.vendeurs[n] = { ca: 0, tickets: 0, ecart: 0, sansVente: 0, ecartsKo: 0 });
+        vd.sansVente++;
+      }
+    });
+  });
+  return r;
+}
+
+function joursDuMois(a, m) {
+  var n = new Date(a, m, 0).getDate(), l = [];
+  for (var j = 1; j <= n; j++) l.push(IDX[cle(a, m, j)]);
+  return l;
+}
+function joursDeLAnnee(a) {
+  return Object.keys(IDX).filter(function (k) { return k.indexOf(a + "-") === 0; }).map(function (k) { return IDX[k]; });
+}
+
+// ---------------------------------------------------------------- rendu commun
+function kpis(r, options) {
+  options = options || {};
+  var h = '<div class="grille-kpi">';
+  h += '<div class="kpi grand"><div class="val">' + dhEntier(r.ca) + '</div><div class="lib">Chiffre d\'affaires' + (options.moyJour ? " &middot; " + dhEntier(options.moyJour) + " / jour ouvert" : "") + '</div></div>';
+  h += '<div class="kpi"><div class="val">' + r.tickets + '</div><div class="lib">Tickets' + (r.nbAnnulees ? ' &middot; <b style="color:var(--rouge)">' + r.nbAnnulees + ' annulee' + (r.nbAnnulees > 1 ? "s" : "") + " (" + dhEntier(r.caAnnule) + ")</b>" : "") + '</div></div>';
+  h += '<div class="kpi"><div class="val">' + (r.tickets ? dh(r.ca / r.tickets) : "-") + '</div><div class="lib">Panier moyen</div></div>';
+  var classeEcart = r.nbComptages ? (r.ecartsKo ? "alerte" : "ok") : "";
+  h += '<div class="kpi ' + classeEcart + '"><div class="val">' + (r.nbComptages ? signe(r.ecart) : "-") + '</div><div class="lib">Ecart de caisse' + (r.ecartsKo ? " &middot; " + r.ecartsKo + " hors tolerance" : "") + '</div></div>';
+  h += '<div class="kpi' + (r.sansVente ? " alerte" : "") + '"><div class="val">' + r.sansVente + '</div><div class="lib">Tiroir ouvert sans vente</div></div>';
+  h += '<div class="kpi"><div class="val">' + dhEntier(r.depots) + '</div><div class="lib">Depots coffre</div></div>';
+  h += '<div class="kpi"><div class="val">' + dhEntier(r.sorties) + '</div><div class="lib">Sorties d\'especes</div></div>';
+  h += '</div>';
+  return h;
+}
+
+function blocPaiement(r) {
+  if (!r.ca) return "";
+  var pe = r.especes / r.ca * 100, pc = r.carte / r.ca * 100, pr = r.caRapides / r.ca * 100;
+  return '<section class="bloc"><h3>Paiements et type de vente</h3>' +
+    '<div class="repartition"><div style="width:' + pe + '%;background:var(--vert)"></div><div style="width:' + pc + '%;background:var(--or)"></div></div>' +
+    '<div class="legende"><span><i style="background:var(--vert)"></i>Especes ' + dhEntier(r.especes) + ' (' + Math.round(pe) + '%)</span><span><i style="background:var(--or)"></i>Carte ' + dhEntier(r.carte) + ' (' + Math.round(pc) + '%)</span></div>' +
+    '<div class="repartition" style="margin-top:14px"><div style="width:' + pr + '%;background:var(--rose)"></div><div style="width:' + (100 - pr) + '%;background:var(--brun-500)"></div></div>' +
+    '<div class="legende"><span><i style="background:var(--rose)"></i>Ventes rapides ' + r.rapides + ' (' + Math.round(pr) + '% du CA)</span><span><i style="background:var(--brun-500)"></i>Detaillees ' + (r.tickets - r.rapides) + '</span></div></section>';
+}
+
+function blocCreneaux(r) {
+  if (!r.ca) return "";
+  var noms = ["7h - 12h", "12h - 16h", "16h - fermeture"], max = Math.max.apply(null, r.creneaux) || 1, h = "";
+  for (var i = 0; i < 3; i++) {
+    h += '<div class="barre-ligne"><span>' + noms[i] + '</span><div class="piste"><div class="rempli" style="width:' + (r.creneaux[i] / max * 100) + '%"></div></div>' +
+      '<span class="chiffre">' + dhEntier(r.creneaux[i]) + '<small>' + r.tCreneaux[i] + ' tickets &middot; ' + (r.tCreneaux[i] ? dhEntier(r.creneaux[i] / r.tCreneaux[i]) : "-") + '</small></span></div>';
+  }
+  return '<section class="bloc"><h3>Par creneau <small>CA &middot; tickets &middot; panier</small></h3>' + h + '</section>';
+}
+
+function blocVendeurs(r) {
+  var noms = Object.keys(r.vendeurs);
+  if (!noms.length) return "";
+  noms.sort(function (a, b) { return r.vendeurs[b].ca - r.vendeurs[a].ca; });
+  var h = '<table><tr><th>Vendeur</th><th class="num">CA</th><th class="num">Tickets</th><th class="num">Sans vente</th><th class="num">Ecarts</th></tr>';
+  noms.forEach(function (n) {
+    var v = r.vendeurs[n];
+    var p = v.ecartsKo ? "ko" : (v.ecart ? "ok" : "neutre");
+    h += '<tr><td>' + esc(n) + '</td><td class="num">' + dhEntier(v.ca) + '</td><td class="num">' + v.tickets + '</td><td class="num">' + (v.sansVente || "-") +
+      '</td><td class="num"><span class="pastille ' + p + '">' + (v.ecart ? signe(v.ecart) : "0") + '</span></td></tr>';
+  });
+  return '<section class="bloc"><h3>Par vendeur</h3>' + h + '</table></section>';
+}
+
+function blocProduits(r, titre) {
+  var noms = Object.keys(r.produits);
+  if (!noms.length) return "";
+  noms.sort(function (a, b) { return r.produits[b] - r.produits[a]; });
+  var max = r.produits[noms[0]], h = "";
+  noms.slice(0, 10).forEach(function (n) {
+    h += '<div class="barre-ligne" style="grid-template-columns: 1fr 90px 44px"><span>' + esc(n) + '</span><div class="piste"><div class="rempli" style="background:var(--rose);width:' + (r.produits[n] / max * 100) + '%"></div></div><span class="chiffre">' + r.produits[n] + '</span></div>';
+  });
+  return '<section class="bloc"><h3>' + titre + ' <small>quantites, hors ventes rapides</small></h3>' + h + '</section>';
+}
+
+// ---------------------------------------------------------------- vues
+function vueJour() {
+  var k = cle(vue.annee, vue.mois, vue.jour), J = IDX[k], dt = new Date(vue.annee, vue.mois - 1, vue.jour);
+  var h = titre(JOURS[dt.getDay()] + " " + vue.jour + " " + MOIS[vue.mois - 1], "jour");
+  if (!J) return h + '<div class="vide-msg">Aucune activite ce jour-la.</div>';
+  var r = resume([J]);
+  h += kpis(r) + blocPaiement(r) + blocCreneaux(r);
+
+  if (J.comptages.length) {
+    var t = '<table><tr><th>Heure</th><th>Comptage</th><th class="num">Compte</th><th class="num">Ecart</th></tr>';
+    J.comptages.forEach(function (c) {
+      var p = c.ecart === null ? "neutre" : (Math.abs(c.ecart) > TOLERANCE ? "ko" : "ok");
+      t += '<tr><td>' + c.heure.slice(0, 5) + '</td><td>' + esc(c.type) + '<br><small style="color:var(--brun-500)">' + esc(c.vendeur) + '</small></td><td class="num">' + dhEntier(c.compte) +
+        '</td><td class="num"><span class="pastille ' + p + '">' + (c.ecart === null ? "-" : signe(c.ecart)) + '</span></td></tr>';
+    });
+    h += '<section class="bloc"><h3>Comptages du tiroir</h3>' + t + '</table></section>';
+  }
+  h += blocVendeurs(r);
+  if (J.sorties.length || J.tiroir.some(function (x) { return x.type === "sans_vente"; })) {
+    var s = '<table><tr><th>Heure</th><th>Mouvement</th><th class="num">Montant</th></tr>';
+    J.sorties.forEach(function (x) { s += '<tr><td>' + x.heure.slice(0, 5) + '</td><td>' + esc(x.type === "Depot coffre" ? "Depot coffre" : x.motif) + '<br><small style="color:var(--brun-500)">' + esc(x.vendeur) + '</small></td><td class="num">' + dhEntier(x.montant) + '</td></tr>'; });
+    J.tiroir.filter(function (x) { return x.type === "sans_vente"; }).forEach(function (x) {
+      s += '<tr><td>' + x.heure.slice(0, 5) + '</td><td><span class="pastille ko">Tiroir sans vente</span> ' + esc(x.motif) + '<br><small style="color:var(--brun-500)">' + esc(x.vendeur) + '</small></td><td class="num">-</td></tr>';
+    });
+    h += '<section class="bloc"><h3>Mouvements d\'especes</h3>' + s + '</table></section>';
+  }
+  if (J.annulees.length) {
+    var an = '<table><tr><th>Heure</th><th>Vente annulee</th><th class="num">Montant</th></tr>';
+    J.annulees.slice().sort(function (a, b) { return a.heure < b.heure ? 1 : -1; }).forEach(function (v) {
+      an += '<tr><td>' + v.heure.slice(0, 5) + '</td><td>' + esc(String(v.annulation).replace(/^ANNULEE( - )?/, "") || "Annulee") +
+        '<br><small style="color:var(--brun-500)">' + esc(v.vendeur) + ' &middot; ' + esc(v.detail) + (v.paiement === "carte" ? " &middot; carte" : "") +
+        '</small></td><td class="num">' + dh(v.total) + '</td></tr>';
+    });
+    h += '<section class="bloc"><h3>Ventes annulees <small>hors CA</small></h3>' + an + '</table></section>';
+  }
+  h += blocProduits(r, "Produits les plus vendus");
+  var tickets = J.ventes.slice().sort(function (a, b) { return a.heure < b.heure ? 1 : -1; });
+  h += '<details><summary>Voir les ' + tickets.length + ' tickets</summary>';
+  tickets.forEach(function (v) {
+    h += '<div class="ticket"><div class="haut"><span>' + v.heure.slice(0, 5) + ' &middot; ' + esc(v.vendeur || "") + '</span><span>' + dh(v.total) + '</span></div><div class="bas">' +
+      esc(v.detail) + (v.paiement === "carte" ? " &middot; carte" : "") + '</div></div>';
+  });
+  return h + '</details>';
+}
+
+function vueMois() {
+  var a = vue.annee, m = vue.mois, h = titre(MOIS[m - 1] + " " + a, "mois");
+  var liste = joursDuMois(a, m), r = resume(liste);
+  var ouverts = liste.filter(function (J) { return J && J.ventes.length; }).length;
+  h += kpis(r, { moyJour: ouverts ? r.ca / ouverts : 0 });
+
+  var cas = liste.map(function (J) { return J ? J.ventes.reduce(function (s, v) { return s + v.total; }, 0) : 0; });
+  var max = Math.max.apply(null, cas) || 1, premier = (new Date(a, m - 1, 1).getDay() + 6) % 7;
+  var auj = new Date(), cal = '<div class="calendrier">';
+  ["L", "M", "M", "J", "V", "S", "D"].forEach(function (x) { cal += '<div class="entete">' + x + '</div>'; });
+  for (var i = 0; i < premier; i++) cal += '<div class="jour vide"></div>';
+  liste.forEach(function (J, i) {
+    var ca = cas[i], alpha = ca ? 0.15 + 0.85 * ca / max : 0;
+    var ko = J && J.comptages.some(function (c) { return c.ecart !== null && Math.abs(c.ecart) > TOLERANCE; });
+    var estAuj = auj.getFullYear() === a && auj.getMonth() + 1 === m && auj.getDate() === i + 1;
+    var fond = ca ? "rgba(193,127,43," + alpha.toFixed(2) + ")" : "var(--brun-100)";
+    var coul = alpha > 0.55 ? "#fff" : "var(--brun-800)";
+    cal += '<button class="jour' + (estAuj ? " aujourdhui" : "") + '" style="background:' + fond + ';color:' + coul + '" onclick="aller(\'jour\',' + a + ',' + m + ',' + (i + 1) + ')">' +
+      (ko ? '<span class="point"></span>' : "") + '<span class="n">' + (i + 1) + '</span><span class="ca">' + (ca ? (ca >= 1000 ? (ca / 1000).toFixed(1).replace(".", ",") + "k" : Math.round(ca)) : "") + '</span></button>';
+  });
+  cal += '</div><div class="legende" style="margin-top:8px"><span><i style="background:var(--or)"></i>plus fonce = plus de CA</span><span><i style="background:var(--rouge);border-radius:50%"></i>ecart hors tolerance</span></div>';
+  h += '<section class="bloc"><h3>Jour par jour <small>touchez un jour</small></h3>' + cal + '</section>';
+
+  var meilleurs = liste.map(function (J, i) { return { j: i + 1, ca: cas[i] }; }).filter(function (x) { return x.ca; });
+  if (meilleurs.length) {
+    meilleurs.sort(function (x, y) { return y.ca - x.ca; });
+    var b = meilleurs[0], p = meilleurs[meilleurs.length - 1];
+    h += '<section class="bloc"><h3>Records du mois</h3><table>' +
+      '<tr><td>Meilleur jour</td><td class="num"><a href="#" onclick="aller(\'jour\',' + a + ',' + m + ',' + b.j + ');return false">' + JOURS[new Date(a, m - 1, b.j).getDay()] + ' ' + b.j + '</a></td><td class="num">' + dhEntier(b.ca) + '</td></tr>' +
+      '<tr><td>Jour le plus faible</td><td class="num"><a href="#" onclick="aller(\'jour\',' + a + ',' + m + ',' + p.j + ');return false">' + JOURS[new Date(a, m - 1, p.j).getDay()] + ' ' + p.j + '</a></td><td class="num">' + dhEntier(p.ca) + '</td></tr></table></section>';
+  }
+  return h + blocPaiement(r) + blocCreneaux(r) + blocVendeurs(r) + blocProduits(r, "Produits du mois");
+}
+
+function vueAnnee() {
+  var a = vue.annee, h = titre(String(a), "annee"), r = resume(joursDeLAnnee(a));
+  h += kpis(r);
+  var cas = [], max = 1;
+  for (var m = 1; m <= 12; m++) { var rm = resume(joursDuMois(a, m)); cas.push(rm); max = Math.max(max, rm.ca); }
+  h += '<section class="bloc"><h3>Mois par mois <small>touchez un mois</small></h3><div class="cartes-mois">';
+  cas.forEach(function (rm, i) {
+    h += '<button class="carte-mois' + (rm.tickets ? "" : " sans") + '" onclick="aller(\'mois\',' + a + ',' + (i + 1) + ')">' +
+      '<div class="nom">' + MOIS[i] + '</div><div class="ca">' + (rm.tickets ? dhEntier(rm.ca) : "-") + '</div>' +
+      '<div class="mini"><div style="width:' + (rm.ca / max * 100) + '%"></div></div>' +
+      '<div class="det">' + (rm.tickets ? rm.tickets + " tickets" + (rm.nbComptages ? " &middot; ecart " + signe(rm.ecart) : "") : "pas d'activite") + '</div></button>';
+  });
+  return h + '</div></section>' + blocCreneaux(r) + blocVendeurs(r) + blocProduits(r, "Produits de l'annee");
+}
+
+function vueAnnees() {
+  var annees = {};
+  Object.keys(IDX).forEach(function (k) { annees[k.slice(0, 4)] = 1; });
+  var h = '<div class="titre-periode"><h2>Toutes les annees</h2></div><div class="cartes-mois">';
+  Object.keys(annees).sort().reverse().forEach(function (a) {
+    var r = resume(joursDeLAnnee(+a));
+    h += '<button class="carte-mois" onclick="aller(\'annee\',' + a + ')"><div class="nom">' + a + '</div><div class="ca">' + dhEntier(r.ca) + '</div><div class="det">' + r.tickets + ' tickets</div></button>';
+  });
+  return h + '</div>';
+}
+
+// ---------------------------------------------------------------- navigation
+function titre(texte, niveau) {
+  return '<div class="titre-periode"><button class="fleche" onclick="decaler(-1)">&#8249;</button><h2>' + texte + '</h2><button class="fleche" onclick="decaler(1)">&#8250;</button></div>';
+}
+
+function decaler(sens) {
+  if (vue.niveau === "jour") {
+    var d = new Date(vue.annee, vue.mois - 1, vue.jour + sens);
+    vue.annee = d.getFullYear(); vue.mois = d.getMonth() + 1; vue.jour = d.getDate();
+  } else if (vue.niveau === "mois") {
+    var d2 = new Date(vue.annee, vue.mois - 1 + sens, 1);
+    vue.annee = d2.getFullYear(); vue.mois = d2.getMonth() + 1;
+  } else if (vue.niveau === "annee") {
+    vue.annee += sens;
+  }
+  afficher();
+}
+
+function aller(niveau, a, m, j) {
+  vue.niveau = niveau;
+  if (a) vue.annee = a;
+  if (m) vue.mois = m;
+  if (j) vue.jour = j;
+  afficher();
+  window.scrollTo(0, 0);
+}
+
+function fil() {
+  var f = '<a href="#" onclick="aller(\'annees\');return false">Annees</a>';
+  if (vue.niveau === "annees") return '<span>Annees</span>';
+  f += vue.niveau === "annee" ? '<span>' + vue.annee + '</span>' : '<a href="#" onclick="aller(\'annee\',' + vue.annee + ');return false">' + vue.annee + '</a>';
+  if (vue.niveau === "annee") return f;
+  f += vue.niveau === "mois" ? '<span>' + MOIS[vue.mois - 1] + '</span>' : '<a href="#" onclick="aller(\'mois\',' + vue.annee + ',' + vue.mois + ');return false">' + MOIS[vue.mois - 1] + '</a>';
+  if (vue.niveau === "mois") return f;
+  return f + '<span>' + vue.jour + '</span>';
+}
+
+function afficher() {
+  document.getElementById("fil").innerHTML = fil();
+  var h = vue.niveau === "jour" ? vueJour() : vue.niveau === "mois" ? vueMois() : vue.niveau === "annee" ? vueAnnee() : vueAnnees();
+  document.getElementById("contenu").innerHTML = h;
+}
+
+// ---------------------------------------------------------------- chargement
+function preparer(brut) {
+  var d = typeof brut === "string" ? JSON.parse(brut) : brut;
+  TOLERANCE = d.tolerance || 10;
+  function obj(lignes, champs) {
+    return (lignes || []).map(function (l) { var o = {}; champs.forEach(function (c, i) { o[c] = l[i]; }); return o; });
+  }
+  // 10e champ "annulation" (vide ou "ANNULEE - motif") : les ventes
+  // annulees sont retirees de tous les calculs et listees a part
+  var toutes = obj(d.ventes, ["id", "date", "heure", "vendeur", "type", "paiement", "total", "categorie", "detail", "annulation"]);
+  toutes.forEach(function (v) { v.total = num(v.total) || 0; });
+  d.ventes = toutes.filter(function (v) { return !v.annulation; });
+  d.annulees = toutes.filter(function (v) { return !!v.annulation; });
+  d.comptages = obj(d.comptages, ["id", "date", "heure", "type", "vendeur", "comptePar", "compte", "attendu", "ecart"]);
+  d.comptages.forEach(function (c) { c.compte = num(c.compte) || 0; c.ecart = (c.ecart === "" || c.ecart == null) ? null : num(c.ecart); });
+  d.sorties = obj(d.sorties, ["id", "date", "heure", "type", "vendeur", "motif", "montant"]);
+  d.sorties.forEach(function (s) { s.montant = num(s.montant) || 0; });
+  d.tiroir = obj(d.tiroir, ["id", "date", "heure", "type", "vendeur", "motif"]);
+  return d;
+}
+
+function recu(brut) {
+  D = preparer(brut);
+  IDX = indexer(D);
+  document.getElementById("maj").textContent = "Mis a jour " + (D.maj || "");
+  if (!vue.annee) {
+    var auj = new Date(), k = cle(auj.getFullYear(), auj.getMonth() + 1, auj.getDate());
+    if (!IDX[k]) { var cles = Object.keys(IDX).sort(); if (cles.length) k = cles[cles.length - 1]; }
+    vue.annee = +k.slice(0, 4); vue.mois = +k.slice(5, 7); vue.jour = +k.slice(8, 10);
+  }
+  afficher();
+}
+
+function erreur(e) {
+  document.getElementById("contenu").innerHTML = '<div class="vide-msg">Impossible de charger les donnees.<br><small>' + esc(e && e.message ? e.message : e) + '</small></div>';
+}
+
+function lireCode() { try { return localStorage.getItem("hp_code") || ""; } catch (e) { return CODE_MEMO; } }
+function ecrireCode(c) { CODE_MEMO = c; try { if (c) localStorage.setItem("hp_code", c); else localStorage.removeItem("hp_code"); } catch (e) {} }
+var CODE_MEMO = "";
+
+function demanderCode(message) {
+  document.getElementById("maj").textContent = "Acces protege";
+  document.getElementById("fil").innerHTML = "";
+  document.getElementById("contenu").innerHTML =
+    '<section class="bloc" style="text-align:center;padding:28px 16px">' +
+    '<h3 style="margin-bottom:14px">Code d\'acces</h3>' +
+    (message ? '<p style="color:#c0392b;margin:0 0 12px">' + esc(message) + '</p>' : '') +
+    '<input id="champCode" type="password" inputmode="numeric" maxlength="8" autocomplete="off" ' +
+    'style="font-size:28px;letter-spacing:8px;text-align:center;width:180px;padding:10px;border:1px solid #ccc;border-radius:10px">' +
+    '<div><button id="validerCode" style="margin-top:16px;font-size:18px;padding:12px 28px">Entrer</button></div></section>';
+  var champ = document.getElementById("champCode");
+  function valider() { var c = champ.value.trim(); if (c) { ecrireCode(c); charger(); } }
+  document.getElementById("validerCode").onclick = valider;
+  champ.onkeydown = function (e) { if (e.key === "Enter") valider(); };
+  champ.focus();
+}
+
+function recuOuRefus(texte) {
+  var d = typeof texte === "string" ? JSON.parse(texte) : texte;
+  if (d && d.refus) {
+    ecrireCode("");
+    demanderCode(d.refus === "bloque" ? "Trop d'essais. Reessaie dans une heure." : "Code incorrect.");
+    return;
+  }
+  recu(texte);
+}
+
+function charger() {
+  if (!window.DONNEES_TEST && !lireCode()) { demanderCode(""); return; }
+  document.getElementById("maj").textContent = "Chargement...";
+  if (!window.DONNEES_TEST) {
+    // credentials "omit" : aucun cookie Google envoye -> pas de conflit de comptes
+    fetch(API + "?code=" + encodeURIComponent(lireCode()), { credentials: "omit" })
+      .then(function (r) { return r.text(); })
+      .then(recuOuRefus)
+      .catch(function () { erreur({ message: "Pas de connexion internet ?" }); });
+  } else if (window.DONNEES_TEST) {
+    recu(window.DONNEES_TEST);
+  }
+}
+document.getElementById("actualiser").onclick = charger;
+charger();
+</script>
+</body>
+</html>

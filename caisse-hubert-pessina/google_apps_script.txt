@@ -1,0 +1,115 @@
+// =====================================================================
+// Caisse Hubert & Pessina -> Google Sheets
+// A coller TEL QUEL dans : Google Sheets > Extensions > Apps Script
+// (le code secret est deja rempli, rien a modifier)
+// =====================================================================
+
+const CODE_SECRET = 'A_REMPLACER';
+
+const ENTETES = {
+  'Ventes':    ['id', 'date', 'heure', 'vendeur', 'type', 'paiement', 'sur place / emporter',
+                'total', 'total HT', 'TVA', 'remise %', 'categorie (vente rapide)', 'detail', 'annulation'],
+  'Comptages': ['id', 'date', 'heure', 'type', 'vendeur', 'compte par', 'compte',
+                'attendu', 'ecart', 'dans tolerance', 'detail pieces / billets', 'note'],
+  'Sorties':   ['id', 'date', 'heure', 'type', 'vendeur', 'motif', 'montant'],
+  'Tiroir':    ['id', 'date', 'heure', 'type', 'vendeur', 'motif', 'resultat', 'vente'],
+  'Coffre':    ['id', 'date', 'heure', 'trouve', 'attendu (depots)', 'ecart', 'nb depots'],
+  'Annulations': ['id', 'date', 'heure', 'vente', 'vendeur', 'montant', 'paiement', 'motif',
+                  'code admin', 'argent rendu (tiroir)'],
+};
+const COL_ANNULATION_VENTES = 14;  // colonne N de l'onglet Ventes
+
+function doPost(e) {
+  let donnees;
+  try {
+    donnees = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return repondre({ ok: false, erreur: 'donnees illisibles' });
+  }
+  if (donnees.jeton !== CODE_SECRET) return repondre({ ok: false, erreur: 'code secret incorrect' });
+  const entetes = ENTETES[donnees.onglet];
+  if (!entetes) return repondre({ ok: false, erreur: 'onglet inconnu' });
+
+  const verrou = LockService.getScriptLock();
+  verrou.waitLock(20000);
+  try {
+    const classeur = SpreadsheetApp.getActiveSpreadsheet();
+    preparerOnglets(classeur);
+    const feuille = classeur.getSheetByName(donnees.onglet);
+
+    // on ignore les lignes deja presentes (meme id) : pas de doublon
+    const derniere = feuille.getLastRow();
+    const dejaLa = new Set(
+      derniere > 1 ? feuille.getRange(2, 1, derniere - 1, 1).getValues().map(r => String(r[0])) : []
+    );
+    const nouvelles = donnees.lignes
+      .filter(l => !dejaLa.has(String(l[0])))
+      .map(l => l.slice(0, entetes.length));
+    if (nouvelles.length) {
+      feuille.getRange(derniere + 1, 1, nouvelles.length, entetes.length).setValues(nouvelles);
+    }
+    // une vente annulee APRES son envoi : on la marque dans l'onglet Ventes
+    if (donnees.onglet === 'Annulations') marquerVentesAnnulees(classeur, donnees.lignes);
+    return repondre({ ok: true, ajoutees: nouvelles.length });
+  } finally {
+    verrou.releaseLock();
+  }
+}
+
+// Colonne N "annulation" de l'onglet Ventes = ANNULEE - motif
+function marquerVentesAnnulees(classeur, lignes) {
+  const ventes = classeur.getSheetByName('Ventes');
+  const derniere = ventes.getLastRow();
+  if (derniere < 2) return;
+  const ids = ventes.getRange(2, 1, derniere - 1, 1).getValues().map(r => String(r[0]));
+  lignes.forEach(l => {
+    const i = ids.indexOf(String(l[3]));  // l[3] = id de la vente
+    if (i >= 0) ventes.getRange(i + 2, COL_ANNULATION_VENTES).setValue('ANNULEE - ' + l[7]);
+  });
+}
+
+// Cree les onglets manquants (avec leurs en-tetes) puis le Resume
+function preparerOnglets(classeur) {
+  Object.keys(ENTETES).forEach(nom => {
+    if (classeur.getSheetByName(nom)) return;
+    const f = classeur.insertSheet(nom);
+    f.appendRow(ENTETES[nom]);
+    f.setFrozenRows(1);
+    f.getRange(1, 1, 1, ENTETES[nom].length).setFontWeight('bold');
+  });
+  // onglet Ventes cree avant l'ajout de la colonne "annulation"
+  const ventes = classeur.getSheetByName('Ventes');
+  if (ventes.getRange(1, COL_ANNULATION_VENTES).getValue() === '') {
+    ventes.getRange(1, COL_ANNULATION_VENTES).setValue('annulation').setFontWeight('bold');
+  }
+  creerResume(classeur);
+}
+
+// Onglet "Resume" : CA et tickets par jour, ecarts par jour et par vendeur
+function creerResume(classeur) {
+  // formule du CA : ventes annulees exclues (mise a jour aussi sur un
+  // Resume deja existant)
+  const formuleCA =
+    "=IFERROR(QUERY(Ventes!A:N, \"select B, sum(H), count(A) where A is not null and N is null " +
+    "group by B order by B desc label B 'Date', sum(H) 'CA', count(A) 'Tickets'\", 1), \"\")";
+  const existant = classeur.getSheetByName('Resume');
+  if (existant) {
+    if (existant.getRange('A2').getFormula() !== formuleCA) existant.getRange('A2').setFormula(formuleCA);
+    return;
+  }
+  const f = classeur.insertSheet('Resume', 0);
+  f.getRange('A1').setValue('CA par jour').setFontWeight('bold');
+  f.getRange('A2').setFormula(formuleCA);
+  f.getRange('E1').setValue('Ecarts de caisse par jour et par vendeur').setFontWeight('bold');
+  f.getRange('E2').setFormula(
+    "=IFERROR(QUERY(Comptages!A:I, \"select B, E, sum(I) where I is not null " +
+    "group by B, E order by B desc label B 'Date', E 'Vendeur', sum(I) 'Ecart'\", 1), \"\")");
+}
+
+function doGet() {
+  return repondre({ ok: true, message: 'Caisse Hubert & Pessina : service actif' });
+}
+
+function repondre(objet) {
+  return ContentService.createTextOutput(JSON.stringify(objet)).setMimeType(ContentService.MimeType.JSON);
+}
