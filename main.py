@@ -143,6 +143,7 @@ class CaisseApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Hubert & Pessina - Caisse [{}]".format(VERSION_APP))
+        self.iconbitmap("logo.ico")
         self.configure(bg=CREME)
 
         x_ecran, y_ecran, largeur_ecran, hauteur_ecran = zone_travail_windows()
