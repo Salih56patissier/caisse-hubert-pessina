@@ -1,0 +1,5 @@
+Version app : V2 - 2026-10-24.27 (interface modernisee)
+Taille fenetre max autorisee : 950x680
+Resolution ecran brute (GetSystemMetrics) : 1920 x 1080
+Zone de travail hors barre des taches (SPI_GETWORKAREA) : 1920 x 1020 (origine x=0, y=0)
+DPI systeme (GetDpiForSystem) : 120 (125% d'echelle)
