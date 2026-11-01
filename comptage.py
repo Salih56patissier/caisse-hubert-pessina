@@ -109,14 +109,22 @@ def dans_tolerance(conn, ecart):
 # Calcul
 # ---------------------------------------------------------------------------
 def lignes_de_comptage(conn):
-    """Les 9 lignes de la feuille, dans l'ordre : pieces puis billets."""
+    """Comptage fin de poste : pieces pesees (grammes) + billets comptes (nombre)."""
     lignes = []
     for v in PIECES:
-        methode = methode_effective(conn, v)
-        lignes.append({"nature": "piece", "valeur": v, "methode": methode,
-                       "poids_unitaire": poids_unitaire(conn, v) if methode == METHODE_PESEE else None})
+        lignes.append({
+            "nature": "piece",
+            "valeur": v,
+            "methode": METHODE_PESEE,
+            "poids_unitaire": poids_unitaire(conn, v) or 1.0,
+        })
     for v in BILLETS:
-        lignes.append({"nature": "billet", "valeur": v, "methode": METHODE_COMPTAGE, "poids_unitaire": None})
+        lignes.append({
+            "nature": "billet",
+            "valeur": v,
+            "methode": METHODE_COMPTAGE,
+            "poids_unitaire": None,
+        })
     return lignes
 
 

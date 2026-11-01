@@ -163,26 +163,6 @@ class FenetreAdmin(tk.Toplevel):
         self.frame_vendeurs.pack(anchor="w", fill="x", pady=(0, 20))
         self._charger_vendeurs()
 
-        tk.Label(cadre_interne, text="Comptage de caisse (etalonnage des pieces)", font=POLICE_SOUS_TITRE,
-                 bg=CREME, fg=BRUN_700).pack(anchor="w", pady=(0, 6))
-        self.frame_comptage = tk.Frame(cadre_interne, bg=CREME)
-        self.frame_comptage.pack(anchor="w", fill="x", pady=(0, 20))
-        self._charger_reglages_comptage()
-
-        # Coffre (clics sur le titre pour reveler la section sync)
-        self._sync_visible = False
-        self._clics_coffre = 0
-        self.label_coffre = tk.Label(cadre_interne, text="Coffre (boite des gros billets)", font=POLICE_SOUS_TITRE,
-                                      bg=CREME, fg=BRUN_700)
-        self.label_coffre.pack(anchor="w", pady=(0, 6))
-        self.label_coffre.bind("<Button-1>", self._clic_coffre)
-        self.frame_coffre = tk.Frame(cadre_interne, bg=CREME)
-        self.frame_coffre.pack(anchor="w", fill="x", pady=(0, 20))
-        self._charger_coffre()
-
-        self.frame_sync = tk.Frame(cadre_interne, bg=CREME)
-        # frame_sync packe seulement si self._sync_visible
-
         tk.Label(cadre_interne, text="Ticket Z (fin de periode + remise a zero)", font=POLICE_SOUS_TITRE,
                  bg=CREME, fg=ROUGE).pack(anchor="w", pady=(0, 6))
         frame_z = tk.Frame(cadre_interne, bg=CREME)

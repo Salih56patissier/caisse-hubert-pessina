@@ -138,7 +138,7 @@ MARGE_SECURITE_ECRAN = 20  # px retires a la zone de travail detectee, par prude
 
 
 class CaisseApp(tk.Tk):
-    LARGEUR_ZONE_TICKET = 330  # panneau de droite (ticket) ; le reste va aux categories/produits
+    LARGEUR_ZONE_TICKET = 340  # panneau de droite (ticket) ; le reste va aux categories/produits
 
     def __init__(self):
         super().__init__()
@@ -158,6 +158,10 @@ class CaisseApp(tk.Tk):
         x = x_ecran + max((largeur_ecran - largeur) // 2, 0)
         y = y_ecran + max((hauteur_ecran - hauteur) // 2, 0)
         self.geometry("{}x{}+{}+{}".format(largeur, hauteur, x, y))
+        # Plein ecran au demarrage
+        self.attributes("-fullscreen", True)
+        self.bind("<Escape>", lambda e: self.attributes("-fullscreen", False))
+        self.bind("<F11>", lambda e: self.attributes("-fullscreen", not self.attributes("-fullscreen")))
 
         # Redimensionnable + bouton Maximiser actif : sur Windows, une fois
         # la fenetre redimensionnable, "Maximiser" agrandit nativement a la
@@ -434,137 +438,258 @@ class CaisseApp(tk.Tk):
             )
 
     def _executer_effacement_especes_interne(self, ratio):
-        from datetime import date
+        """Retire un pourcentage du CA du jour en supprimant réellement des tickets.
+        Contraintes dures : espèces sans pain, étalement 20 min, cible aléatoire non ronde,
+        zéro trace (delete + renumérotation + recalcul)."""
         date_texte = date.today().strftime("%Y-%m-%d")
+        random.seed(int(date_texte.replace("-", "")))  # graine reproductible
 
-        # Total global du jour (toutes ventes non annulees)
-        total_global = self.conn.execute(
+        # CA total du jour (non annulées)
+        total_global = float(self.conn.execute(
             "SELECT COALESCE(SUM(total), 0) AS s FROM ventes "
             "WHERE date = ? AND COALESCE(annulee, 0) = 0",
             (date_texte,),
-        ).fetchone()["s"]
+        ).fetchone()["s"])
 
-        # Ventes especes du jour (celles qu'on peut supprimer)
-        ventes_especes = self.conn.execute(
-            "SELECT * FROM ventes WHERE date = ? AND COALESCE(annulee, 0) = 0 "
-            "AND mode_paiement = 'especes' ORDER BY total ASC",
+        if total_global <= 0:
+            dialogues.Message(self, "Effacement", "Aucune vente aujourd'hui.", niveau="attention")
+            return
+
+        # Cible aléatoire non ronde dans ±1 %
+        marge = 0.01
+        cible_pct = random.uniform(ratio - marge, ratio + marge)
+        cible = total_global * cible_pct
+        tol_bas = total_global * (ratio - marge)
+        tol_haut = total_global * (ratio + marge)
+
+        # Charger toutes les ventes non annulées du jour
+        ventes = self.conn.execute(
+            "SELECT id, heure, total, mode_paiement FROM ventes "
+            "WHERE date = ? AND COALESCE(annulee, 0) = 0 "
+            "ORDER BY heure, id",
             (date_texte,),
         ).fetchall()
 
-        if total_global <= 0:
-            dialogues.Message(self, "Effacement",
-                              "Aucune vente aujourd'hui.",
-                              niveau="attention")
-            return
-        if not ventes_especes:
-            dialogues.Message(self, "Effacement",
-                              "Aucune vente especes aujourd'hui.\n"
-                              "Impossible de retirer du total.",
-                              niveau="attention")
+        if len(ventes) < 3:
+            dialogues.Message(self, "Effacement", "Moins de 3 tickets aujourd'hui.", niveau="attention")
             return
 
-        cible = total_global * ratio
-        total_especes = sum(v["total"] for v in ventes_especes)
+        def contient_pain(vente_id):
+            row = self.conn.execute(
+                "SELECT 1 FROM vente_lignes WHERE vente_id = ? "
+                "AND LOWER(nom_produit) LIKE '%pain%' LIMIT 1",
+                (vente_id,),
+            ).fetchone()
+            return row is not None
 
-        # Selection : on prend les ventes especes les plus proches de la cible
-        # (on autorise un leger depassement pour mieux coller au pourcentage)
+        def est_eligible(v, autoriser_pain=False):
+            if v["mode_paiement"] != "especes":
+                return False
+            if contient_pain(v["id"]) and not autoriser_pain:
+                return False
+            if v["total"] < 2.0:
+                return False
+            if v["total"] > cible * 0.35:
+                return False
+            return True
+
+        # Vivier espèces sans pain
+        vivier = [v for v in ventes if est_eligible(v, False)]
+        if sum(v["total"] for v in vivier) < cible * 1.2:
+            vivier = [v for v in ventes if est_eligible(v, True)]  # élargissement pain, jamais carte
+
+        # Exclure premier et dernier
+        if ventes:
+            premier = ventes[0]["id"]
+            dernier = ventes[-1]["id"]
+            vivier = [v for v in vivier if v["id"] not in (premier, dernier)]
+
+        if not vivier:
+            dialogues.Message(self, "Effacement", "Aucun ticket éligible.", niveau="attention")
+            return
+
+        # Créneaux de 20 min
+        def minutes(h):
+            parts = str(h).split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+
+        mins = [minutes(v["heure"]) for v in ventes]
+        min_m, max_m = min(mins), max(mins)
+        slots = []
+        t = min_m
+        while t <= max_m:
+            slots.append((t, t + 20))
+            t += 20
+
+        by_slot = {i: [] for i in range(len(slots))}
+        for v in vivier:
+            m = minutes(v["heure"])
+            for i, (a, b) in enumerate(slots):
+                if a <= m < b:
+                    by_slot[i].append(v)
+                    break
+
+        # Sélection : 1 max par créneau, jamais adjacents
         selection = []
         somme = 0.0
-        for v in ventes_especes:
-            if somme + v["total"] <= max(cible * 1.25, cible + 50):
-                selection.append(v)
-                somme += v["total"]
-            if somme >= cible * 0.75:
+        pris = set()
+        ordre = list(range(len(slots)))
+        random.shuffle(ordre)
+
+        for i in ordre:
+            if i in pris or (i - 1) in pris or (i + 1) in pris:
+                continue
+            cands = by_slot[i][:]
+            random.shuffle(cands)
+            for cand in cands:
+                if somme + cand["total"] > tol_haut:
+                    continue
+                selection.append(cand)
+                somme += cand["total"]
+                pris.add(i)
+                break
+            if tol_bas <= somme <= tol_haut:
                 break
 
-        # Si rien n'a ete pris, on force au moins la plus petite vente especes
-        if not selection and ventes_especes:
-            plus_petite = min(ventes_especes, key=lambda v: v["total"])
-            selection = [plus_petite]
-            somme = plus_petite["total"]
+        # Complément si besoin
+        if somme < tol_bas:
+            for i in ordre:
+                if i in pris or (i - 1) in pris or (i + 1) in pris:
+                    continue
+                cands = [v for v in by_slot[i] if v not in selection]
+                random.shuffle(cands)
+                for cand in cands:
+                    if somme + cand["total"] > tol_haut * 1.02:
+                        continue
+                    selection.append(cand)
+                    somme += cand["total"]
+                    pris.add(i)
+                    break
+                if somme >= tol_bas:
+                    break
 
         if not selection:
-            dialogues.Message(
-                self, "Effacement",
-                "Impossible de trouver des ventes especes\n"
-                "pour retirer environ {:.0f} % du total\n"
-                "(total jour : {:.2f} DH, especes : {:.2f} DH).".format(
-                    ratio * 100, total_global, total_especes),
-                niveau="attention",
-            )
+            dialogues.Message(self, "Effacement", "Impossible d'atteindre la fourchette.", niveau="attention")
             return
 
-        pct_reel_global = (somme / total_global * 100) if total_global else 0
-
-        # Liste lisible des tickets qui vont etre effaces
-        lignes_tickets = []
-        for v in sorted(selection, key=lambda x: x["heure"], reverse=True):
-            heure = v["heure"][:5] if v["heure"] else "?"
-            lignes_tickets.append("  • {}  —  {:.2f} DH".format(heure, v["total"]))
-        liste = "\n".join(lignes_tickets[:12])  # max 12 lignes pour rester lisible
-        if len(selection) > 12:
-            liste += "\n  • ... (+{} autre(s))".format(len(selection) - 12)
-
-        texte = (
-            "Total du jour : {:.2f} DH\n"
-            "Cible (~{:.0f} % du total) : {:.2f} DH\n"
-            "Ventes especes disponibles : {:.2f} DH\n\n"
-            "Tickets qui vont etre EFFACES :\n{}\n\n"
-            "Total selectionne : {:.2f} DH ({:.1f} % du jour)\n\n"
-            "Confirmer la suppression definitive ?"
-        ).format(
-            total_global, ratio * 100, cible, total_especes,
-            liste, somme, pct_reel_global,
-        )
+        ids = [v["id"] for v in selection]
 
         def executer():
-            ids = [v["id"] for v in selection]
-            nb_ok = self._supprimer_ventes_sans_trace(ids)
+            try:
+                self._supprimer_et_renumeroter(date_texte, ids, total_global, tol_bas, tol_haut)
+            except Exception as e:
+                self.conn.rollback()
+                dialogues.Message(self, "Erreur", str(e)[:300], niveau="erreur")
+                return
             dialogues.Message(
-                self, "Effacement termine",
-                "{:d} vente(s) especes effacee(s)\n"
-                "pour {:.2f} DH\n"
-                "(environ {:.1f} % du total du jour).".format(
-                    nb_ok, somme, pct_reel_global),
+                self, "Terminé",
+                "{:d} ticket(s) supprimé(s)\nCA restant dans la fourchette.".format(len(ids)),
                 niveau="info",
             )
-            self._ajustement_visible = False
-            self._dessiner_entete()
             self._dernier_ticket = None
             self._charger_dernier_ticket_depuis_db()
 
-        dialogues.confirmer(
-            self, "Effacer ces tickets ? (~{:.0f} %)".format(ratio * 100),
-            texte, "Oui, effacer ces tickets", executer,
-            libelle_non="Annuler", couleur_oui=ROUGE, hauteur=480,
+        # Confirmation (comme avant)
+        lignes = ["  • {}  —  {:.2f} DH".format(v["heure"][:5], v["total"]) for v in sorted(selection, key=lambda x: x["heure"])]
+        texte = "Cible ~{:.1f}% ({:.2f} DH)\nSélection : {:.2f} DH\n\n{}".format(
+            cible_pct * 100, cible, somme, "\n".join(lignes[:15])
         )
+        dialogues.confirmer(self, "Confirmer la suppression ?", texte, "Oui, supprimer", executer,
+                            libelle_non="Annuler", couleur_oui=ROUGE)
 
-    def _supprimer_ventes_sans_trace(self, vente_ids):
-        """Retire les ventes et les enregistrements lies. Renvoie le nombre
-        de ventes retirees."""
-        if not vente_ids:
-            return 0
-        placeholders = ",".join("?" * len(vente_ids))
-        with self.conn:
-            # Ordre important a cause des FOREIGN KEY
+    def _supprimer_et_renumeroter(self, date_texte, ids_a_supprimer, ca_avant, tol_bas, tol_haut):
+        """Suppression réelle + renumérotation 1..N des tickets restants du jour.
+        Tout dans une seule transaction. Assertions de fin."""
+        if not ids_a_supprimer:
+            return
+
+        placeholders = ",".join("?" * len(ids_a_supprimer))
+
+        with self.conn:  # transaction unique
+            # 1. Suppression des lignes et des ventes
             self.conn.execute(
                 "DELETE FROM vente_lignes WHERE vente_id IN ({})".format(placeholders),
-                vente_ids,
+                ids_a_supprimer,
             )
             self.conn.execute(
                 "DELETE FROM annulations WHERE vente_id IN ({})".format(placeholders),
-                vente_ids,
+                ids_a_supprimer,
             )
-            # journal_tiroir : vente_id peut etre NULL ou pointer vers la vente
             self.conn.execute(
                 "DELETE FROM journal_tiroir WHERE vente_id IN ({})".format(placeholders),
-                vente_ids,
+                ids_a_supprimer,
             )
-            cur = self.conn.execute(
+            self.conn.execute(
                 "DELETE FROM ventes WHERE id IN ({})".format(placeholders),
-                vente_ids,
+                ids_a_supprimer,
             )
-            return cur.rowcount
+
+            # 2. Récupérer les tickets restants du jour, ordre chrono
+            restants = self.conn.execute(
+                "SELECT id FROM ventes WHERE date = ? AND COALESCE(annulee, 0) = 0 "
+                "ORDER BY heure, id",
+                (date_texte,),
+            ).fetchall()
+            restants_ids = [r["id"] for r in restants]
+            n = len(restants_ids)
+
+            # 3. Renumérotation (mapping ancien -> nouveau)
+            # On utilise des ids temporaires négatifs pour éviter les collisions
+            for i, old_id in enumerate(restants_ids, start=1):
+                self.conn.execute("UPDATE ventes SET id = ? WHERE id = ?", (-i, old_id))
+                self.conn.execute("UPDATE vente_lignes SET vente_id = ? WHERE vente_id = ?", (-i, old_id))
+                self.conn.execute("UPDATE journal_tiroir SET vente_id = ? WHERE vente_id = ?", (-i, old_id))
+
+            # Remettre les ids positifs 1..N
+            for i in range(1, n + 1):
+                self.conn.execute("UPDATE ventes SET id = ? WHERE id = ?", (i, -i))
+                self.conn.execute("UPDATE vente_lignes SET vente_id = ? WHERE vente_id = ?", (i, -i))
+                self.conn.execute("UPDATE journal_tiroir SET vente_id = ? WHERE vente_id = ?", (i, -i))
+
+            # 4. Remise à N du compteur (sqlite_sequence)
+            self.conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = 'ventes'", (n,))
+
+            # 5. Recalcul CA restant
+            ca_restant = float(self.conn.execute(
+                "SELECT COALESCE(SUM(total), 0) FROM ventes WHERE date = ? AND COALESCE(annulee, 0) = 0",
+                (date_texte,),
+            ).fetchone()[0])
+
+            # 6. Assertions
+            if not (tol_bas <= ca_restant <= tol_haut):
+                raise AssertionError("CA hors fourchette : {:.2f} (attendu {:.2f}-{:.2f})".format(
+                    ca_restant, tol_bas, tol_haut))
+
+            # Aucun carte ni pain touché
+            if ids_a_supprimer:
+                bad = self.conn.execute(
+                    "SELECT COUNT(*) FROM ventes WHERE id IN ({}) "
+                    "AND (mode_paiement != 'especes' OR EXISTS ("
+                    "  SELECT 1 FROM vente_lignes l WHERE l.vente_id = ventes.id "
+                    "  AND LOWER(l.nom_produit) LIKE '%pain%'))".format(placeholders),
+                    ids_a_supprimer,
+                ).fetchone()[0]
+                if bad:
+                    raise AssertionError("Ticket carte ou pain supprimé")
+
+            # Numérotation continue
+            nums = [r[0] for r in self.conn.execute(
+                "SELECT id FROM ventes WHERE date = ? ORDER BY id", (date_texte,)
+            ).fetchall()]
+            if nums != list(range(1, n + 1)):
+                raise AssertionError("Numérotation non continue")
+
+            # CA = somme
+            somme_check = float(self.conn.execute(
+                "SELECT SUM(total) FROM ventes WHERE date = ?", (date_texte,)
+            ).fetchone()[0] or 0)
+            if abs(somme_check - ca_restant) > 0.01:
+                raise AssertionError("CA incohérent")
+
+            # Note : pas de stock dans le schéma actuel, pas de colonnes date_modification.
+            # Si tu ajoutes un stock plus tard, décrémente ici avant le commit.
+
+        # Fin de la transaction (commit automatique du with)
 
     def _construire_ticket(self, zone_ticket):
         # Seule la liste des articles au milieu (zone_lignes_scroll) est
@@ -591,8 +716,8 @@ class CaisseApp(tk.Tk):
         # Sur place / A emporter (TVA differente) : l'option active en framboise
         self.segments_mode_vente = Segments(
             zone_haut, [("sur_place", "Sur place"), ("a_emporter", "A emporter")],
-            self._definir_mode_vente, largeur=largeur_utile, hauteur=34, bg=BLANC,
-            police=("Segoe UI", 10, "bold"),
+            self._definir_mode_vente, largeur=largeur_utile, hauteur=64, bg=BLANC,
+            police=("Segoe UI", 13, "bold"),
         )
         self.segments_mode_vente.pack(side="top", padx=marge, pady=(0, 8))
         self._rafraichir_mode_vente()
@@ -688,13 +813,206 @@ class CaisseApp(tk.Tk):
     # ------------------------------------------------------------------
     # Navigation : ecran categories <-> ecran produits <-> ecran parfums
     # ------------------------------------------------------------------
+
+    CATEGORIES_PAR_DEFAUT = ["Pain", "Viennoiserie", "Pâtisserie", "Salé", "Divers"]
+
+    def _charger_ordre_categories(self):
+        import os
+        chemin = os.path.join(os.path.dirname(database.DB_PATH), "ordre_categories.txt")
+        if os.path.exists(chemin):
+            try:
+                with open(chemin, "r", encoding="utf-8") as f:
+                    ordre = [l.strip() for l in f if l.strip()]
+                ordre = [c for c in ordre if c in self.CATEGORIES_PAR_DEFAUT]
+                for c in self.CATEGORIES_PAR_DEFAUT:
+                    if c not in ordre:
+                        ordre.append(c)
+                return ordre
+            except Exception:
+                pass
+        return list(self.CATEGORIES_PAR_DEFAUT)
+
+    def _sauver_ordre_categories(self, ordre):
+        import os
+        chemin = os.path.join(os.path.dirname(database.DB_PATH), "ordre_categories.txt")
+        try:
+            with open(chemin, "w", encoding="utf-8") as f:
+                f.write("\n".join(ordre))
+        except Exception:
+            pass
+
+    def _construire_ecran_vente_rapide(self):
+        """Ecran principal adapte a la taille de l'ecran.
+        Clavier plus large, montant lisible sans etre coupe, ticket plus etroit."""
+        largeur_dispo, hauteur_totale = self._zone_produits_taille_visible()
+        if largeur_dispo <= 1:
+            return
+
+        # Sur petit ecran, on donne plus de place au clavier
+        largeur_clavier = max(240, int(largeur_dispo * 0.42))
+        largeur_categories = max(180, largeur_dispo - largeur_clavier - 16)
+
+        cadre = tk.Frame(self.frame_produits, bg=CREME)
+        cadre.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # === CALCULATRICE (plus large) ===
+        gauche = tk.Frame(cadre, bg=CREME, highlightbackground="#d16a91", highlightthickness=2,
+                          width=largeur_clavier)
+        gauche.pack(side="left", fill="y", padx=(0, 4), pady=1)
+        gauche.pack_propagate(False)
+
+        # Montant : police adaptee pour ne pas etre coupee
+        cadre_affichage = tk.Frame(gauche, bg=BLANC)
+        cadre_affichage.pack(side="top", fill="x", padx=4, pady=(4, 4))
+        # Police plus petite pour que 3-4 chiffres tiennent
+        taille_police_montant = 36 if largeur_clavier < 320 else 42
+        self.label_montant_rapide = tk.Label(
+            cadre_affichage, text="0 DH", font=("Segoe UI", taille_police_montant, "bold"),
+            bg=BLANC, fg=BRUN_800, anchor="e", padx=8, pady=8
+        )
+        self.label_montant_rapide.pack(fill="x")
+
+        pave = tk.Frame(gauche, bg=CREME)
+        pave.pack(side="top", fill="both", expand=True, padx=4, pady=(0, 4))
+        touches = [["7","8","9"], ["4","5","6"], ["1","2","3"], [",","0","<-"]]
+        largeur_touche = max(55, (largeur_clavier - 36) // 3)
+        hauteur_touche = max(48, (hauteur_totale - 120) // 4)
+        for r, ligne in enumerate(touches):
+            for c, val in enumerate(ligne):
+                btn = BoutonArrondi(
+                    pave, lignes=[(val, ("Segoe UI", 18, "bold"), BRUN_800)],
+                    commande=lambda v=val: self._appuyer_touche_rapide(v),
+                    largeur=largeur_touche, hauteur=hauteur_touche, rayon=8,
+                    couleur_fond=BLANC, couleur_bordure=BRUN_200, bg=CREME,
+                )
+                btn.grid(row=r, column=c, padx=2, pady=2)
+
+        # === CATEGORIES ===
+        droite = tk.Frame(cadre, bg=CREME)
+        droite.pack(side="left", fill="both", expand=True, padx=(2, 0), pady=1)
+
+        couleurs = {
+            "Pain": "#c8892b",
+            "Viennoiserie": "#e0a040",
+            "Pâtisserie": "#e75480",
+            "Salé": "#5b9a4c",
+            "Divers": "#8e5ba6",
+        }
+        icones = {
+            "Pain": "🍞",
+            "Viennoiserie": "🥐",
+            "Pâtisserie": "🍪",
+            "Salé": "🥖",
+            "Divers": "",
+        }
+
+        ordre = self._charger_ordre_categories()
+        hauteur_cat = max(50, (hauteur_totale - 20) // 5)
+        for nom in ordre:
+            couleur = couleurs.get(nom, BRUN_700)
+            icone = icones.get(nom, "")
+            texte = (icone + "  " + nom) if icone else nom
+
+            ligne = tk.Frame(droite, bg=CREME)
+            ligne.pack(side="top", fill="x", pady=1)
+
+            fleches = tk.Frame(ligne, bg=CREME)
+            fleches.pack(side="left", padx=(0, 2))
+            tk.Button(fleches, text="▲", font=("Segoe UI", 8, "bold"),
+                      command=lambda n=nom: self._deplacer_categorie(n, -1),
+                      bg=BRUN_200, relief="flat", width=2).pack(side="top")
+            tk.Button(fleches, text="▼", font=("Segoe UI", 8, "bold"),
+                      command=lambda n=nom: self._deplacer_categorie(n, +1),
+                      bg=BRUN_200, relief="flat", width=2).pack(side="top")
+
+            btn = BoutonArrondi(
+                ligne, lignes=[(texte, ("Segoe UI", 15, "bold"), BLANC)],
+                commande=lambda n=nom: self._ajouter_categorie_rapide(n),
+                largeur=largeur_categories - 40, hauteur=hauteur_cat, rayon=10,
+                couleur_fond=couleur, couleur_bordure=couleur, bg=CREME,
+            )
+            btn.pack(side="left", fill="x", expand=True)
+
+        self.saisie_rapide = ""
+        self._rafraichir_montant_rapide()
+
+    def _deplacer_categorie(self, nom, direction):
+        ordre = self._charger_ordre_categories()
+        if nom not in ordre:
+            return
+        i = ordre.index(nom)
+        j = i + direction
+        if 0 <= j < len(ordre):
+            ordre[i], ordre[j] = ordre[j], ordre[i]
+            self._sauver_ordre_categories(ordre)
+            self._rafraichir_ecran()
+
+    def _appuyer_touche_rapide(self, touche):
+        s = getattr(self, "saisie_rapide", "")
+        if touche == "<-":
+            s = s[:-1]
+        elif touche == ",":
+            if "," in s:
+                return
+            s = (s or "0") + ","
+        else:
+            if "," in s:
+                if len(s.split(",")[1]) >= 2:
+                    return
+            elif len(s) >= 5:
+                return
+            if s == "0":
+                s = ""
+            s += touche
+        self.saisie_rapide = s
+        self._rafraichir_montant_rapide()
+
+    def _montant_rapide(self):
+        s = getattr(self, "saisie_rapide", "")
+        if not s:
+            return 0.0
+        try:
+            return float(s.replace(",", "."))
+        except ValueError:
+            return 0.0
+
+    def _rafraichir_montant_rapide(self):
+        if hasattr(self, "label_montant_rapide"):
+            texte = (getattr(self, "saisie_rapide", "") or "0") + " DH"
+            self.label_montant_rapide.configure(text=texte)
+
+    def _ajouter_categorie_rapide(self, nom_categorie):
+        montant = self._montant_rapide()
+        if montant <= 0:
+            if hasattr(self, "label_montant_rapide"):
+                self.label_montant_rapide.configure(fg=ROUGE)
+                self.after(300, lambda: self.label_montant_rapide.configure(fg=BRUN_800))
+            return
+        self._ajouter_ligne_prix_libre(montant, nom_categorie)
+        self.saisie_rapide = ""
+        self._rafraichir_montant_rapide()
+
+    def _ajouter_sans_categorie(self):
+        montant = self._montant_rapide()
+        if montant <= 0:
+            return
+        self._ajouter_ligne_prix_libre(montant, None)
+        self.saisie_rapide = ""
+        self._rafraichir_montant_rapide()
+
+    def _valider_ticket_rapide(self, mode_paiement):
+        if not self.ticket:
+            dialogues.Message(self, "Ticket vide", "Ajoutez d'abord un montant.", niveau="attention")
+            return
+        self._finaliser_encaissement(mode_paiement)
+
     def _rafraichir_ecran(self):
         for widget in self.frame_produits.winfo_children():
             widget.destroy()
         self._taille_ecran_construit = self._zone_produits_taille_visible()
 
         if self.categorie_active_id is None:
-            self._construire_selection_categories()
+            self._construire_ecran_vente_rapide()
         elif self.produit_sous_menu_actif is not None:
             self._construire_vue_sous_menu(self.produit_sous_menu_actif)
         else:
@@ -999,12 +1317,13 @@ class CaisseApp(tk.Tk):
     # Ticket
     # ------------------------------------------------------------------
     def _taux_pour_ligne(self, ligne):
-        """Taux de TVA (%) effectif pour une ligne de ticket : celui du
-        produit s'il en a un fixe (ex: 0% pour le pain), sinon celui du
-        mode de vente en cours (Sur place / A emporter)."""
+        """Pain = 0% toujours. Autres = 10% sur place, 20% a emporter."""
         if ligne["tva_fixe"] is not None:
             return ligne["tva_fixe"]
-        return self.taux_tva[self.mode_vente]
+        # Pas de taux fixe : on applique le mode
+        if self.mode_vente == "sur_place":
+            return 10.0
+        return 20.0
 
     def _ajouter_au_ticket(self, nom, prix_unitaire, quantite, tva_fixe=None):
         for ligne in self.ticket:
@@ -1168,22 +1487,20 @@ class CaisseApp(tk.Tk):
             callback(mode)
 
         BoutonArrondi(
-            popup, lignes=[("ESPECES", POLICE_ENCAISSER, BLANC)], commande=lambda: choisir("especes"),
-            largeur=300, hauteur=68, rayon=14, couleur_fond=VERT, couleur_bordure=VERT, bg=BLANC,
-        ).pack(pady=(6, 10))
+            popup, lignes=[("ESPECES", ("Segoe UI", 28, "bold"), BLANC)], commande=lambda: choisir("especes"),
+            largeur=420, hauteur=100, rayon=16, couleur_fond=VERT, couleur_bordure=VERT, bg=BLANC,
+        ).pack(pady=(8, 12))
         BoutonArrondi(
-            popup, lignes=[("CARTE", POLICE_ENCAISSER, BLANC)], commande=lambda: choisir("carte"),
-            largeur=300, hauteur=68, rayon=14, couleur_fond=OR, couleur_bordure=OR, bg=BLANC,
-        ).pack(pady=(0, 14))
+            popup, lignes=[("CARTE", ("Segoe UI", 28, "bold"), BLANC)], commande=lambda: choisir("carte"),
+            largeur=420, hauteur=100, rayon=16, couleur_fond=OR, couleur_bordure=OR, bg=BLANC,
+        ).pack(pady=(0, 16))
         BoutonArrondi(
-            popup, lignes=[("Annuler", POLICE_CATEGORIE, BLANC)], commande=popup.destroy,
-            largeur=300, hauteur=48, rayon=12, couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=BLANC,
-        ).pack(pady=(0, 18))
+            popup, lignes=[("Annuler", ("Segoe UI", 16, "bold"), BLANC)], commande=popup.destroy,
+            largeur=420, hauteur=60, rayon=12, couleur_fond=BRUN_500, couleur_bordure=BRUN_500, bg=BLANC,
+        ).pack(pady=(0, 20))
 
-        # taille = celle que demandent les widgets (voir PaveNumerique) : une
-        # hauteur fixe rognait le bouton Annuler avec la mise a l'echelle Windows
         popup.update_idletasks()
-        largeur, hauteur = max(380, popup.winfo_reqwidth()), popup.winfo_reqheight()
+        largeur, hauteur = max(520, popup.winfo_reqwidth()), max(420, popup.winfo_reqheight())
         x = self.winfo_rootx() + (self.winfo_width() - largeur) // 2
         y = self.winfo_rooty() + (self.winfo_height() - hauteur) // 2
         popup.geometry("{}x{}+{}+{}".format(largeur, hauteur, max(x, 0), max(y, 0)))
@@ -1287,8 +1604,10 @@ class CaisseApp(tk.Tk):
         caisse.comptage_requis_a_la_connexion)."""
         action, ancien = caisse.comptage_requis_a_la_connexion(self.conn, vendeur["id"])
         vid = vendeur["id"]
-        if action is None:
+        # Prise de poste : on entre directement, pas de comptage a l'arrivee
+        if action in (None, "ouverture", "releve_absente"):
             self._connecter(vendeur)
+            return
         elif vendeur["sans_comptage"] and caisse.derniere_releve(self.conn) is None:
             # tout premier demarrage (apres une remise a zero) : rien a
             # reprendre, il tape simplement l'argent present dans la caisse
@@ -1319,14 +1638,14 @@ class CaisseApp(tk.Tk):
             def valider(montant, details):
                 caisse.enregistrer_releve(self.conn, caisse.OUVERTURE, montant, vid, vid, details=details)
                 self._connecter(vendeur)
-            self._demander_comptage("Prise de poste : comptez le tiroir", valider, vendeur_id=vid)
+            self._demander_comptage("Comptage du soir (pieces pesees)", valider, vendeur_id=vid)
         elif action == "fermeture_oubliee":
             def valider(montant, details):
                 caisse.enregistrer_releve(self.conn, caisse.FERMETURE, montant, ancien, vid,
                                           note="caisse non fermee, comptee le jour suivant", details=details)
                 caisse.enregistrer_releve(self.conn, caisse.OUVERTURE, montant, vid, vid, details=details)
                 self._connecter(vendeur)
-            self._demander_comptage("Caisse non fermee : comptez le tiroir", valider, vendeur_id=vid)
+            self._demander_comptage("Comptage du soir (pieces pesees)", valider, vendeur_id=vid)
         else:  # releve_absente
             def valider(montant, details):
                 caisse.enregistrer_releve(self.conn, caisse.CHANGEMENT, montant, ancien, vid,
@@ -1334,7 +1653,7 @@ class CaisseApp(tk.Tk):
                                           details=details)
                 caisse.enregistrer_releve(self.conn, caisse.OUVERTURE, montant, vid, vid, details=details)
                 self._connecter(vendeur)
-            self._demander_comptage("Prise de poste : comptez le tiroir", valider, vendeur_id=vid)
+            self._demander_comptage("Comptage du soir (pieces pesees)", valider, vendeur_id=vid)
 
     def _prise_de_poste_sans_comptage(self, vendeur, avertissement=None):
         """Le patron ne compte pas en arrivant : le fond de caisse reprend
@@ -1380,10 +1699,7 @@ class CaisseApp(tk.Tk):
         self._fermer_confirmation_rapide()
         dialogues.Menu(self, "Caisse - {}".format(self.vendeur["nom"]), [
             ("Fin de poste", self._changer_vendeur, BRUN_700),
-            ("Depot coffre", self._depot_coffre, VERT),
-            ("Sortie d'especes", self._sortie_especes, OR),
             ("Annuler une vente", self._ouvrir_gestion_ventes, ROSE),
-        ] + ([("Relever le coffre", self._relever_coffre_patron, BRUN_500)] if self._est_patron() else []) + [
             ("Fermer la caisse", self._fermer_caisse, ROUGE),
         ])
 
@@ -1436,31 +1752,11 @@ class CaisseApp(tk.Tk):
         return self.vendeur is not None and bool(self.vendeur["sans_comptage"])
 
     def _depart_patron(self, type_releve, message_fin):
-        """Depart d'un vendeur qui ne compte pas (patron, Madame) : pas de
-        comptage. Soit il n'a rien pris (la base reste l'attendu), soit il a
-        pris de l'argent et tape seulement ce qu'il laisse (ex: 300) : la
-        difference est enregistree en "Retrait patron". Le prochain vendeur
-        qui compte verifiera (ecart de passation)."""
+        """Depart simplifie : on deconnecte directement."""
         vid = self._vendeur_id()
-
-        def rien_pris():
-            attendu = caisse.calcul_attendu(self.conn)["attendu"]
-            caisse.depart_sans_comptage(self.conn, type_releve, attendu, vid)
-            self._deconnecter(message_fin)
-
-        def valider(laisse):
-            retrait = caisse.depart_sans_comptage(self.conn, type_releve, laisse, vid)
-            self._deconnecter("{}\nRetrait patron : {:g} DH - laisse : {:g} DH.".format(message_fin, retrait, laisse))
-
-        def argent_pris():
-            tiroir.ouvrir_en_fond(tiroir.TYPE_SORTIE, motif=caisse.MOTIF_RETRAIT_PATRON, vendeur_id=vid)
-            PaveNumerique(self, titre="Laisse dans le tiroir (DH)", callback_validation=valider,
-                          chiffres_max=6, permettre_decimales=True, autoriser_zero=True)
-
-        dialogues.Menu(self, "Sans comptage", [
-            ("Rien pris dans le tiroir", rien_pris, VERT),
-            ("J'ai pris de l'argent", argent_pris, OR),
-        ], libelle_retour="Retour")
+        attendu = caisse.calcul_attendu(self.conn)["attendu"]
+        caisse.depart_sans_comptage(self.conn, type_releve, attendu, vid)
+        self._deconnecter(message_fin)
 
     def _changer_vendeur(self):
         if not self._ticket_vide_sinon_prevenir():
@@ -1576,11 +1872,14 @@ class CaisseApp(tk.Tk):
             self._encaisser_vente_rapide(montant, nom_categorie, mode_paiement)
 
     def _ajouter_ligne_prix_libre(self, montant, nom_categorie):
-        """Ligne "Vente rapide" au prix tape, dans le ticket en cours. TVA :
-        celle fixe de la categorie si toute la categorie a la meme (ex: pain
-        0%), sinon celle du mode de vente au moment de l'encaissement."""
+        """Ligne "Vente rapide" au prix tape.
+        Pain = 0% toujours.
+        Autres categories = 10% sur place, 20% a emporter."""
         nom = "Vente rapide - {}".format(nom_categorie) if nom_categorie else "Vente rapide"
-        tva_fixe = ventes.taux_tva_vente_rapide(self.conn, nom_categorie, None)
+        if nom_categorie == "Pain":
+            tva_fixe = 0.0   # toujours 0%
+        else:
+            tva_fixe = None  # calcule selon le mode au moment du ticket
         self._ajouter_au_ticket(nom, round(float(montant), 2), 1, tva_fixe)
 
     def _encaisser_vente_rapide(self, montant, nom_categorie, mode_paiement):
